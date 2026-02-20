@@ -24,6 +24,11 @@ const queuePayloadValidator = v.object({
   metadata: v.optional(v.record(v.string(), v.string())),
 });
 
+const runtimeConfigValidator = v.record(
+  v.string(),
+  v.union(v.string(), v.number(), v.boolean()),
+);
+
 const claimedJobValidator = v.object({
   messageId: v.id("messageQueue"),
   conversationId: v.string(),
@@ -91,6 +96,48 @@ export const enqueueMessage = mutation({
       attempts: 0,
       maxAttempts: args.maxAttempts ?? DEFAULT_CONFIG.retry.maxAttempts,
     });
+  },
+});
+
+export const appendConversationMessages = mutation({
+  args: {
+    conversationId: v.string(),
+    messages: v.array(
+      v.object({
+        role: v.union(
+          v.literal("system"),
+          v.literal("user"),
+          v.literal("assistant"),
+          v.literal("tool"),
+        ),
+        content: v.string(),
+        at: v.optional(v.number()),
+      }),
+    ),
+    nowMs: v.optional(v.number()),
+  },
+  returns: v.object({
+    updated: v.boolean(),
+    messageCount: v.number(),
+  }),
+  handler: async (ctx, args) => {
+    const conversation = await ctx.db
+      .query("conversations")
+      .withIndex("by_conversationId", (q) => q.eq("conversationId", args.conversationId))
+      .unique();
+    if (!conversation) {
+      return { updated: false, messageCount: 0 };
+    }
+    const nowMs = args.nowMs ?? Date.now();
+    const messages = args.messages.map((message, index) => ({
+      role: message.role,
+      content: message.content,
+      at: message.at ?? nowMs + index,
+    }));
+    await ctx.db.patch(conversation._id, {
+      contextHistory: [...conversation.contextHistory, ...messages],
+    });
+    return { updated: true, messageCount: messages.length };
   },
 });
 
@@ -751,6 +798,7 @@ export const getHydrationBundleForClaimedJob = query({
       secretRefs: v.array(v.string()),
       secretValues: v.record(v.string(), v.string()),
       telegramBotToken: v.union(v.null(), v.string()),
+      runtimeConfig: runtimeConfigValidator,
     }),
   ),
   handler: async (ctx, args) => {
@@ -816,6 +864,7 @@ export const getHydrationBundleForClaimedJob = query({
       secretRefs: profile.secretsRef,
       secretValues,
       telegramBotToken,
+      runtimeConfig: profile.runtimeConfig,
     };
   },
 });

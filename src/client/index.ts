@@ -17,8 +17,8 @@ export function exposeApi(
         | { type: "read" }
         | {
             type: "write";
-            conversationId: string;
-            agentKey: string;
+            conversationId?: string;
+            agentKey?: string;
           },
     ) => Promise<string>;
   },
@@ -76,7 +76,7 @@ export function exposeApi(
         workerId: v.string(),
       },
       handler: async (ctx, args) => {
-        await options.auth(ctx, { type: "read" });
+        await options.auth(ctx, { type: "write" });
         return await ctx.runMutation(component.queue.claimNextJob, args);
       },
     }),
@@ -87,7 +87,7 @@ export function exposeApi(
         leaseId: v.string(),
       },
       handler: async (ctx, args) => {
-        await options.auth(ctx, { type: "read" });
+        await options.auth(ctx, { type: "write" });
         return await ctx.runMutation(component.queue.heartbeatJob, args);
       },
     }),
@@ -98,7 +98,7 @@ export function exposeApi(
         leaseId: v.string(),
       },
       handler: async (ctx, args) => {
-        await options.auth(ctx, { type: "read" });
+        await options.auth(ctx, { type: "write" });
         return await ctx.runMutation(component.queue.completeJob, args);
       },
     }),
@@ -110,7 +110,7 @@ export function exposeApi(
         errorMessage: v.string(),
       },
       handler: async (ctx, args) => {
-        await options.auth(ctx, { type: "read" });
+        await options.auth(ctx, { type: "write" });
         return await ctx.runMutation(component.queue.failJob, args);
       },
     }),
@@ -122,6 +122,27 @@ export function exposeApi(
       handler: async (ctx, args) => {
         await options.auth(ctx, { type: "read" });
         return await ctx.runQuery(component.queue.getHydrationBundleForClaimedJob, args);
+      },
+    }),
+    workerAppendConversationMessages: mutationGeneric({
+      args: {
+        conversationId: v.string(),
+        messages: v.array(
+          v.object({
+            role: v.union(
+              v.literal("system"),
+              v.literal("user"),
+              v.literal("assistant"),
+              v.literal("tool"),
+            ),
+            content: v.string(),
+            at: v.optional(v.number()),
+          }),
+        ),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runMutation(component.lib.appendConversationMessages, args);
       },
     }),
     seedDefaultAgent: mutationGeneric({

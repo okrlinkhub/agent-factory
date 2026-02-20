@@ -55,7 +55,7 @@ export const reconcileWorkerPool = action({
       processing: number;
       deadLetter: number;
     } = await ctx.runQuery(api.queue.getQueueStats, { nowMs });
-    const workerStats: {
+    let workerStats: {
       activeCount: number;
       idleCount: number;
       workers: Array<{
@@ -68,6 +68,39 @@ export const reconcileWorkerPool = action({
       }>;
     } = await ctx.runQuery(api.queue.getWorkerStats, {});
 
+    const localWorkersWithMachine = workerStats.workers.filter(
+      (worker) =>
+        worker.machineId &&
+        (worker.appName === null || worker.appName === providerConfig.appName),
+    );
+    const liveMachineIds = new Set<string>();
+    let staleWorkers: Array<(typeof workerStats.workers)[number]> = [];
+    if (localWorkersWithMachine.length > 0) {
+      const providerWorkers = await provider.listWorkers(providerConfig.appName);
+      for (const worker of providerWorkers) {
+        liveMachineIds.add(worker.machineId);
+      }
+      staleWorkers = localWorkersWithMachine.filter(
+        (worker) => worker.machineId && !liveMachineIds.has(worker.machineId),
+      );
+      for (const worker of staleWorkers) {
+        await ctx.runMutation(internal.queue.upsertWorkerState, {
+          workerId: worker.workerId,
+          provider: providerConfig.kind,
+          status: "stopped",
+          load: 0,
+          nowMs,
+          scheduledShutdownAt: nowMs,
+          machineId: worker.machineId ?? undefined,
+          appName: providerConfig.appName,
+          region: providerConfig.region,
+        });
+      }
+      if (staleWorkers.length > 0) {
+        workerStats = await ctx.runQuery(api.queue.getWorkerStats, {});
+      }
+    }
+
     const computedDesired = Math.ceil(
       queueStats.queuedReady / Math.max(1, scaling.queuePerWorkerTarget),
     );
@@ -79,7 +112,7 @@ export const reconcileWorkerPool = action({
     const activeWorkers = workerStats.activeCount;
 
     let spawned = 0;
-    let terminated = 0;
+    let terminated = staleWorkers.length;
 
     if (desiredWorkers > activeWorkers) {
       const toSpawn = Math.min(scaling.spawnStep, desiredWorkers - activeWorkers);
@@ -116,9 +149,17 @@ export const reconcileWorkerPool = action({
         .slice(0, toDrain);
 
       for (const worker of idleFirst) {
-        if (worker.machineId) {
-          await provider.cordonWorker(providerConfig.appName, worker.machineId);
-          await provider.terminateWorker(providerConfig.appName, worker.machineId);
+        const machineId = worker.machineId;
+        const machineIsLive = machineId ? liveMachineIds.has(machineId) : false;
+        if (machineId && machineIsLive) {
+          try {
+            await provider.cordonWorker(providerConfig.appName, machineId);
+            await provider.terminateWorker(providerConfig.appName, machineId);
+          } catch (error) {
+            if (!isSafeMissingMachineError(error)) {
+              throw error;
+            }
+          }
         }
         await ctx.runMutation(internal.queue.upsertWorkerState, {
           workerId: worker.workerId,
@@ -127,7 +168,7 @@ export const reconcileWorkerPool = action({
           load: 0,
           nowMs,
           scheduledShutdownAt: nowMs,
-          machineId: worker.machineId ?? undefined,
+          machineId: machineId ?? undefined,
           appName: providerConfig.appName,
           region: providerConfig.region,
         });
@@ -182,4 +223,9 @@ function resolveProvider(kind: string, flyApiToken: string): WorkerProvider {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function isSafeMissingMachineError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /not found|unknown machine|does not exist|internal server error/i.test(message);
 }

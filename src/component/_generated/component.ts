@@ -150,6 +150,21 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       >;
     };
     lib: {
+      appendConversationMessages: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          conversationId: string;
+          messages: Array<{
+            at?: number;
+            content: string;
+            role: "system" | "user" | "assistant" | "tool";
+          }>;
+          nowMs?: number;
+        },
+        { messageCount: number; updated: boolean },
+        Name
+      >;
       bindUserAgent: FunctionReference<
         "mutation",
         "internal",
@@ -335,6 +350,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             providerUserId: string;
             rawUpdateJson?: string;
           };
+          runtimeConfig: Record<string, string | number | boolean>;
           secretRefs: Array<string>;
           secretValues: Record<string, string>;
           snapshot: null | {
@@ -503,6 +519,21 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       >;
     };
     queue: {
+      appendConversationMessages: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          conversationId: string;
+          messages: Array<{
+            at?: number;
+            content: string;
+            role: "system" | "user" | "assistant" | "tool";
+          }>;
+          nowMs?: number;
+        },
+        { messageCount: number; updated: boolean },
+        Name
+      >;
       claimNextJob: FunctionReference<
         "mutation",
         "internal",
@@ -603,6 +634,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             providerUserId: string;
             rawUpdateJson?: string;
           };
+          runtimeConfig: Record<string, string | number | boolean>;
           secretRefs: Array<string>;
           secretValues: Record<string, string>;
           snapshot: null | {

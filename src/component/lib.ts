@@ -3,6 +3,7 @@ export {
   importPlaintextSecret as importSecret,
   getSecretsStatus as secretStatus,
   enqueueMessage as enqueue,
+  appendConversationMessages,
   claimNextJob as claim,
   heartbeatJob as heartbeat,
   completeJob as complete,

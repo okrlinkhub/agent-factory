@@ -80,7 +80,7 @@ export const createPairingCode = mutation({
 
     for (const row of pendingCodes) {
       const nextStatus: "expired" | "pending" =
-        row.expiresAt <= nowMs || row.agentKey === args.agentKey ? "expired" : "pending";
+        (row.expiresAt <= nowMs || row.agentKey === args.agentKey) ? "expired" : "pending";
       if (nextStatus !== row.status) {
         await ctx.db.patch(row._id, { status: nextStatus });
       }

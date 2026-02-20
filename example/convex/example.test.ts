@@ -44,7 +44,10 @@ describe("example", () => {
     });
     expect(secretStatus.every((item) => item.hasActive)).toBe(true);
 
-    const reconcile = await t.action(api.example.startWorkers, {});
+    const reconcile = await t.action(api.example.startWorkers, {
+      convexUrl: "https://acrobatic-bass-782.eu-west-1.convex.cloud",
+      workspaceId: "default",
+    });
     expect(reconcile.desiredWorkers).toBe(0);
     expect(reconcile.activeWorkers).toBe(0);
     expect(reconcile.spawned).toBe(0);
@@ -147,5 +150,34 @@ describe("example", () => {
     });
     expect(resolved.consumerUserId).toBe(alice!._id);
     expect(resolved.agentKey).toBe("default");
+  });
+
+  test("worker append conversation messages", async () => {
+    const t = initConvexTest();
+    await t.mutation(api.example.seedDefaultAgent, {});
+    await t.mutation(api.example.enqueue, {
+      conversationId: "telegram:ctx-1",
+      agentKey: "default",
+      provider: "telegram",
+      providerUserId: "ctx-user",
+      messageText: "hello",
+    });
+    const claimed = await t.mutation(api.example.workerClaim, { workerId: "t-worker" });
+    expect(claimed).toBeTruthy();
+    await t.mutation(api.example.workerAppendConversationMessages, {
+      conversationId: "telegram:ctx-1",
+      messages: [
+        { role: "user", content: "hello" },
+        { role: "assistant", content: "world" },
+      ],
+    });
+    const hydration = await t.query(api.example.workerHydrationBundle, {
+      messageId: claimed!.messageId,
+      workspaceId: "default",
+    });
+    expect(hydration?.conversationState.contextHistory.length).toBeGreaterThanOrEqual(2);
+    const tail = hydration?.conversationState.contextHistory.slice(-2) ?? [];
+    expect(tail[0]?.content).toBe("hello");
+    expect(tail[1]?.content).toBe("world");
   });
 });
