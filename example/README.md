@@ -24,8 +24,24 @@ Apri l'example e usa i blocchi nell'ordine:
 1. **Seed default agent**
 2. **Import telegram.botToken**
 3. **Import fly.apiToken** (oppure passalo al volo al bottone start workers)
-4. **Start/Reconcile workers**
-5. **Queue ingress demo** per enqueue test
+4. **Bind User to Agent** (manuale admin/debug) oppure **Pairing Wizard (/start)** per utente finale
+5. **Start/Reconcile workers**
+6. **Queue ingress demo** per enqueue test
+
+Note runtime:
+- il consumer example fa ingress + enqueue + pairing;
+- il processing loop dei job è lato worker Fly;
+- i token Telegram devono stare nel secret store del componente (scoped per agente), non nelle env globali Fly.
+- il consumer non deve implementare wrapper custom claim/complete/fail: usa il contratto worker esposto dal componente.
+
+## Pairing guidato via /start
+
+Nel wizard UI:
+
+1. seleziona utente e `agentKey`;
+2. genera pairing code;
+3. invia all'utente deep-link `https://t.me/<botUsername>?start=<code>`;
+4. quando l'utente invia `/start <code>`, il webhook del componente completa automaticamente il bind Telegram.
 
 ## Pairing one-time Telegram -> user -> agent
 

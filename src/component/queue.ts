@@ -685,7 +685,7 @@ export const prepareHydrationSnapshot = internalMutation({
   },
 });
 
-export const getHydrationBundleForClaimedJob = internalQuery({
+export const getHydrationBundleForClaimedJob = query({
   args: {
     messageId: v.id("messageQueue"),
     workspaceId: v.string(),
@@ -697,28 +697,31 @@ export const getHydrationBundleForClaimedJob = internalQuery({
       conversationId: v.string(),
       agentKey: v.string(),
       payload: queuePayloadValidator,
-      snapshot: v.object({
-        snapshotId: v.id("hydrationSnapshots"),
-        snapshotKey: v.string(),
-        compiledPromptStack: v.array(
-          v.object({
-            section: v.string(),
-            content: v.string(),
-          }),
-        ),
-        skillsBundle: v.array(
-          v.object({
-            skillKey: v.string(),
-            manifestMd: v.string(),
-          }),
-        ),
-        memoryWindow: v.array(
-          v.object({
-            path: v.string(),
-            excerpt: v.string(),
-          }),
-        ),
-      }),
+      snapshot: v.union(
+        v.null(),
+        v.object({
+          snapshotId: v.id("hydrationSnapshots"),
+          snapshotKey: v.string(),
+          compiledPromptStack: v.array(
+            v.object({
+              section: v.string(),
+              content: v.string(),
+            }),
+          ),
+          skillsBundle: v.array(
+            v.object({
+              skillKey: v.string(),
+              manifestMd: v.string(),
+            }),
+          ),
+          memoryWindow: v.array(
+            v.object({
+              path: v.string(),
+              excerpt: v.string(),
+            }),
+          ),
+        }),
+      ),
       conversationState: v.object({
         contextHistory: v.array(
           v.object({
@@ -746,6 +749,8 @@ export const getHydrationBundleForClaimedJob = internalQuery({
         ),
       }),
       secretRefs: v.array(v.string()),
+      secretValues: v.record(v.string(), v.string()),
+      telegramBotToken: v.union(v.null(), v.string()),
     }),
   ),
   handler: async (ctx, args) => {
@@ -769,25 +774,48 @@ export const getHydrationBundleForClaimedJob = internalQuery({
       .query("hydrationSnapshots")
       .withIndex("by_snapshotKey", (q) => q.eq("snapshotKey", snapshotKey))
       .first();
-    if (!snapshot) return null;
+
+    const secretValues: Record<string, string> = {};
+    for (const secretRef of profile.secretsRef) {
+      const activeSecret = await ctx.db
+        .query("secrets")
+        .withIndex("by_secretRef_and_active", (q) =>
+          q.eq("secretRef", secretRef).eq("active", true),
+        )
+        .unique();
+      if (!activeSecret) continue;
+      secretValues[secretRef] = decryptSecretValue(
+        activeSecret.encryptedValue,
+        activeSecret.algorithm,
+      );
+    }
+
+    const telegramSecretRef = profile.secretsRef.find(
+      (ref) => ref === "telegram.botToken" || ref.startsWith("telegram.botToken."),
+    );
+    const telegramBotToken = telegramSecretRef ? secretValues[telegramSecretRef] ?? null : null;
 
     return {
       messageId: message._id,
       conversationId: message.conversationId,
       agentKey: message.agentKey,
       payload: message.payload,
-      snapshot: {
-        snapshotId: snapshot._id,
-        snapshotKey: snapshot.snapshotKey,
-        compiledPromptStack: snapshot.compiledPromptStack,
-        skillsBundle: snapshot.skillsBundle,
-        memoryWindow: snapshot.memoryWindow,
-      },
+      snapshot: snapshot
+        ? {
+            snapshotId: snapshot._id,
+            snapshotKey: snapshot.snapshotKey,
+            compiledPromptStack: snapshot.compiledPromptStack,
+            skillsBundle: snapshot.skillsBundle,
+            memoryWindow: snapshot.memoryWindow,
+          }
+        : null,
       conversationState: {
         contextHistory: conversation.contextHistory,
         pendingToolCalls: conversation.pendingToolCalls,
       },
       secretRefs: profile.secretsRef,
+      secretValues,
+      telegramBotToken,
     };
   },
 });

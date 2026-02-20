@@ -153,7 +153,7 @@ export const DEFAULT_CONFIG: AgentFactoryConfig = {
     kind: "fly",
     appName: "agent-factory-workers",
     organizationSlug: "personal",
-    image: "registry.fly.io/agent-factory-workers:deployment-01KHWQBVHF07FYAE7P093XYHD6",
+    image: "registry.fly.io/agent-factory-workers:deployment-01KHX3F07DFKVV68AVN2CA9YK6",
     region: "ams",
   },
 };

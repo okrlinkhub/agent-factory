@@ -161,6 +161,21 @@ export default defineSchema({
     .index("by_telegramChatId_and_status", ["telegramChatId", "status"])
     .index("by_agentKey_and_status", ["agentKey", "status"]),
 
+  pairingCodes: defineTable({
+    code: v.string(),
+    consumerUserId: v.string(),
+    agentKey: v.string(),
+    status: v.union(v.literal("pending"), v.literal("used"), v.literal("expired")),
+    createdAt: v.number(),
+    expiresAt: v.number(),
+    usedAt: v.optional(v.number()),
+    telegramUserId: v.optional(v.string()),
+    telegramChatId: v.optional(v.string()),
+  })
+    .index("by_code", ["code"])
+    .index("by_consumerUserId_and_status", ["consumerUserId", "status"])
+    .index("by_expiresAt", ["expiresAt"]),
+
   workspaceDocuments: defineTable({
     workspaceId: v.string(),
     docType: v.union(

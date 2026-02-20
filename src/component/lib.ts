@@ -20,4 +20,7 @@ export {
   resolveAgentForUser,
   resolveAgentForTelegram,
   getUserAgentBinding,
+  createPairingCode,
+  consumePairingCode,
+  getPairingCodeStatus,
 } from "./identity.js";

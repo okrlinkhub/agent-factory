@@ -20,11 +20,22 @@ export const enqueueTelegramMessage = mutation({
   },
 });
 
-export const claimForWorker = mutation({
-  args: { workerId: v.string() },
+export const upsertExampleAgentProfile = mutation({
+  args: {
+    agentKey: v.string(),
+    secretRef: v.string(),
+  },
   handler: async (ctx, args) => {
-    return await ctx.runMutation(components.agentFactory.lib.claim, {
-      workerId: args.workerId,
+    await getAuthUserId(ctx);
+    return await ctx.runMutation(components.agentFactory.lib.configureAgent, {
+      agentKey: args.agentKey,
+      version: "1.0.0",
+      soulMd: "# Soul",
+      clientMd: "# Client",
+      skills: ["agent-bridge"],
+      runtimeConfig: { model: "gpt-5" },
+      secretsRef: [args.secretRef],
+      enabled: true,
     });
   },
 });
@@ -109,6 +120,11 @@ export const listUsersWithBindings = query({
 
 export const {
   enqueue,
+  workerClaim,
+  workerHeartbeat,
+  workerComplete,
+  workerFail,
+  workerHydrationBundle,
   queueStats,
   workerStats,
   seedDefaultAgent,
@@ -120,6 +136,9 @@ export const {
   myAgentKey,
   getUserAgentBinding,
   resolveAgentForTelegram,
+  createPairingCode,
+  consumePairingCode,
+  getPairingCodeStatus,
 } = exposeApi(components.agentFactory, {
   auth: async (ctx, operation) => {
     const userId = await getAuthUserId(ctx);

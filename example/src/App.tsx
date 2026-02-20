@@ -9,6 +9,7 @@ function App() {
   const seedExampleUsers = useMutation(api.example.seedExampleUsers);
   const importSecret = useMutation(api.example.importSecret);
   const bindUserAgent = useMutation(api.example.bindUserAgent);
+  const createPairingCode = useMutation(api.example.createPairingCode);
   const startWorkers = useAction(api.example.startWorkers);
   const stats = useQuery(api.example.queueStats, {});
   const workerStats = useQuery(api.example.workerStats, {});
@@ -17,6 +18,11 @@ function App() {
   const secretsStatus = useQuery(api.example.secretStatus, {
     secretRefs: ["telegram.botToken", "fly.apiToken"],
   });
+  const [latestPairingCode, setLatestPairingCode] = useState("");
+  const pairingStatus = useQuery(
+    api.example.getPairingCodeStatus,
+    latestPairingCode ? { code: latestPairingCode } : "skip",
+  );
   const [chatId, setChatId] = useState("947270381897662534");
   const [messageText, setMessageText] = useState("Ciao da Telegram ingress");
   const [telegramBotToken, setTelegramBotToken] = useState("");
@@ -26,8 +32,10 @@ function App() {
   const [secretResult, setSecretResult] = useState<string | null>(null);
   const [bindingResult, setBindingResult] = useState<string | null>(null);
   const [workersResult, setWorkersResult] = useState<string | null>(null);
+  const [pairingResult, setPairingResult] = useState<string | null>(null);
   const [selectedUserId, setSelectedUserId] = useState("");
   const [bindingAgentKey, setBindingAgentKey] = useState("default");
+  const [telegramBotUsername, setTelegramBotUsername] = useState("");
   const [telegramUserIdForBinding, setTelegramUserIdForBinding] = useState("");
   const [telegramChatIdForBinding, setTelegramChatIdForBinding] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
@@ -94,6 +102,8 @@ function App() {
     try {
       const result = await startWorkers({
         flyApiToken: flyApiToken.trim() || undefined,
+        convexUrl: import.meta.env.VITE_CONVEX_URL,
+        workspaceId: "default",
       });
       setWorkersResult(
         `Workers desiderati: ${result.desiredWorkers}, attivi: ${result.activeWorkers}, spawned: ${result.spawned}, terminated: ${result.terminated}.`,
@@ -122,6 +132,28 @@ function App() {
       );
     } catch (error) {
       setBindingResult((error as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const generatePairingCode = async () => {
+    if (!selectedUserId) return;
+    setBusy("pairing-code");
+    setPairingResult(null);
+    try {
+      const result = await createPairingCode({
+        consumerUserId: selectedUserId,
+        agentKey: bindingAgentKey.trim() || "default",
+      });
+      setLatestPairingCode(result.code);
+      setPairingResult(
+        `Pairing code creato per user=${result.consumerUserId}, agent=${result.agentKey}. Scade alle ${new Date(
+          result.expiresAt,
+        ).toLocaleTimeString()}.`,
+      );
+    } catch (error) {
+      setPairingResult((error as Error).message);
     } finally {
       setBusy(null);
     }
@@ -305,6 +337,66 @@ function App() {
               </tbody>
             </table>
           </div>
+        </div>
+        <div
+          style={{
+            marginBottom: "1rem",
+            padding: "1rem",
+            backgroundColor: "rgba(128, 128, 128, 0.1)",
+            borderRadius: "8px",
+          }}
+        >
+          <h3>3b) Pairing Wizard (/start)</h3>
+          <p style={{ marginTop: 0, marginBottom: "0.75rem" }}>
+            Genera un pairing code one-time e condividi il deep-link Telegram. Quando
+            l&apos;utente invia <code>/start &lt;code&gt;</code>, il webhook del componente
+            completa automaticamente il bind Telegram.
+          </p>
+          <div style={{ marginBottom: "0.75rem" }}>
+            <input
+              value={telegramBotUsername}
+              onChange={(event) => setTelegramBotUsername(event.target.value)}
+              placeholder="telegram bot username (senza @)"
+              style={{ marginRight: "0.5rem", padding: "0.5rem", width: "35%" }}
+            />
+            <button
+              onClick={generatePairingCode}
+              disabled={busy !== null || selectedUserId.length === 0}
+            >
+              {busy === "pairing-code" ? "Generating..." : "Generate pairing code"}
+            </button>
+          </div>
+          {latestPairingCode ? (
+            <div style={{ fontSize: "0.9rem", marginBottom: "0.5rem" }}>
+              <div>
+                Pairing code: <code>{latestPairingCode}</code>
+              </div>
+              {telegramBotUsername.trim() ? (
+                <div style={{ marginTop: "0.35rem" }}>
+                  Deep-link:{" "}
+                  <code>
+                    {`https://t.me/${telegramBotUsername.trim()}?start=${latestPairingCode}`}
+                  </code>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          {pairingStatus ? (
+            <p style={{ fontSize: "0.9rem", marginTop: "0.5rem", marginBottom: 0 }}>
+              Stato pairing: <strong>{pairingStatus.status}</strong>
+              {pairingStatus.telegramUserId
+                ? ` | telegramUserId=${pairingStatus.telegramUserId}`
+                : ""}
+              {pairingStatus.telegramChatId
+                ? ` | telegramChatId=${pairingStatus.telegramChatId}`
+                : ""}
+            </p>
+          ) : null}
+          {pairingResult ? <p style={{ marginTop: "0.5rem" }}>{pairingResult}</p> : null}
+          <p style={{ fontSize: "0.85rem", marginTop: "0.5rem", marginBottom: 0 }}>
+            Secret richiesto per questo agente:{" "}
+            <code>{`telegram.botToken.${(bindingAgentKey.trim() || "default").toLowerCase()}`}</code>
+          </p>
         </div>
         <div
           style={{

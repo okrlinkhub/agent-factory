@@ -43,14 +43,22 @@ export const enqueueTelegramMessage = mutation({
 });
 ```
 
-After enqueue, your **consumer application runtime** must process the queue by calling:
+After enqueue, a **queue processor runtime** must process the queue by calling:
 - `components.agentFactory.lib.claim`
 - `components.agentFactory.lib.getHydrationBundle`
 - `components.agentFactory.lib.heartbeat`
 - `components.agentFactory.lib.complete` or `components.agentFactory.lib.fail`
 
-This package does not run a queue processor by itself.  
-If you run a gateway-only image (for example an OpenClaw gateway container), it is normal to see jobs remain `queued` until your consumer runtime executes the loop above.
+In this project setup, the queue processor runtime is **Fly worker-only** (not the consumer webhook app).
+The consumer app receives ingress and enqueues, while Fly workers dequeue and execute jobs.
+The worker should consume tenant-specific tokens from the hydration payload (resolved by the component), not from global Fly env vars.
+
+If you use `exposeApi(...)`, the worker contract is available directly on the consumer API surface:
+- `workerClaim`
+- `workerHydrationBundle`
+- `workerHeartbeat`
+- `workerComplete`
+- `workerFail`
 
 ### HTTP Routes
 
@@ -73,7 +81,9 @@ export default http;
 This exposes:
 - `POST /agent-factory/telegram/webhook` -> enqueue-only (no business processing)
 
-Important: the webhook/router only receives ingress and enqueues. The dequeue/processing loop must run in your consumer app (for example Next.js/Vite backend runtime, server worker, or a dedicated process you own).
+Important: the webhook/router only receives ingress and enqueues.
+Do not point Telegram directly to Fly worker machines.
+Use webhook -> consumer app (Next.js/Vercel) -> Convex queue -> Fly workers (pull-based processing).
 
 ### One-time Telegram pairing and internal user mapping
 
@@ -83,20 +93,33 @@ table in the consumer app.
 
 Typical one-time pairing flow:
 
-1. Your app authenticates the user and generates a one-time token.
-2. User opens Telegram deep-link (`/start <token>`).
-3. Your backend validates the token and calls:
-   - `components.agentFactory.lib.bindUserAgent` with:
-     - `consumerUserId`
-     - `agentKey`
-     - optional `telegramUserId` / `telegramChatId`
-4. Webhook ingress can resolve the binding internally and enqueue with the mapped
+1. Your app authenticates the user and creates a one-time pairing code via
+   `createPairingCode`.
+2. User opens Telegram deep-link (`/start <pairingCode>`).
+3. `registerRoutes(...)` webhook consumes the pairing code and performs
+   `bindUserAgent` automatically with `source: "telegram_pairing"` and
+   Telegram ids from the update.
+4. Webhook ingress then resolves the binding internally and enqueues with the mapped
    `agentKey`.
+
+Available pairing APIs (via `exposeApi(...)`):
+- `createPairingCode`
+- `getPairingCodeStatus`
+
+Telegram token storage (multi-tenant):
+- store tenant token in component secrets with an agent-scoped ref (for example `telegram.botToken.<agentKey>`)
+- include that ref in `agentProfiles.secretsRef`
+- worker gets resolved plaintext from hydration bundle (`telegramBotToken`) at runtime
+- do not use a single global `TELEGRAM_BOT_TOKEN` on Fly app
 
 `registerRoutes(...)` supports this behavior with:
 - `resolveAgentKeyFromBinding` (default `true`)
 - `fallbackAgentKey` (default `"default"`)
 - `requireBindingForTelegram` (default `false`, when `true` rejects unbound users)
+
+Special handling for `/start`:
+- `/start <pairingCode>` attempts pairing consumption and does not enqueue the command.
+- invalid `/start` payload returns `200` with pairing error details to avoid Telegram retries.
 
 ## Architecture
 
@@ -105,7 +128,7 @@ flowchart LR
   telegramWebhook[TelegramWebhook] --> appRouter[Consumer Router NextOrVite]
   appRouter --> enqueueMutation[ConvexEnqueueMutation]
   enqueueMutation --> messageQueue[ConvexMessageQueue]
-  messageQueue --> claimLoop[Consumer Processing Loop]
+  messageQueue --> claimLoop[FlyWorkerProcessingLoop]
   claimLoop --> hydrateStep[HydrateFromConvex]
   hydrateStep --> runEngine[OpenClawEngineExecution]
   runEngine --> telegramSend[TelegramDirectReply]
@@ -113,8 +136,8 @@ flowchart LR
   heartbeatLease --> cleanupTask[PeriodicLeaseCleanup]
   cleanupTask --> messageQueue
   schedulerNode[ConvexSchedulerAndAutoscaler] --> flyProvider[FlyMachinesProvider]
-  flyProvider --> consumerRuntime[Consumer-owned Runtime]
-  consumerRuntime --> claimLoop
+  flyProvider --> flyWorkers[FlyWorkerMachines]
+  flyWorkers --> claimLoop
 ```
 
 ## Data model
@@ -168,6 +191,16 @@ The current provider implementation uses Fly Machines API endpoints for:
 - list machines
 - cordon machine
 - terminate machine
+
+Recommended runtime split:
+- Consumer app (Next.js/Vercel): webhook ingress + enqueue only
+- Fly worker app: claim/heartbeat/complete/fail loop
+
+Anti-pattern to avoid:
+- Telegram webhook -> Fly worker HTTP endpoint
+- Reason: workers are batch processors, may be scaled to zero, and should not be used as public ingress.
+- Global Fly env `TELEGRAM_BOT_TOKEN` for all tenants
+- Reason: breaks multi-tenant isolation and forces shared bot credentials.
 
 References:
 - https://docs.machines.dev/

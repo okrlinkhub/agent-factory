@@ -11,6 +11,8 @@ import { FlyMachinesProvider, type WorkerProvider } from "./providers/fly.js";
 export const reconcileWorkerPool = action({
   args: {
     flyApiToken: v.optional(v.string()),
+    convexUrl: v.optional(v.string()),
+    workspaceId: v.optional(v.string()),
     nowMs: v.optional(v.number()),
     scalingPolicy: v.optional(scalingPolicyValidator),
     providerConfig: v.optional(providerConfigValidator),
@@ -35,6 +37,17 @@ export const reconcileWorkerPool = action({
         "Missing Fly API token. Import an active 'fly.apiToken' secret or pass flyApiToken explicitly.",
       );
     }
+    const convexUrl =
+      args.convexUrl ??
+      (await ctx.runQuery(internal.queue.getActiveSecretPlaintext, {
+        secretRef: "convex.url",
+      }));
+    if (!convexUrl) {
+      throw new Error(
+        "Missing Convex URL. Import an active 'convex.url' secret or pass convexUrl explicitly.",
+      );
+    }
+    const workspaceId = args.workspaceId ?? "default";
     const provider = resolveProvider(providerConfig.kind, flyApiToken);
 
     const queueStats: {
@@ -77,6 +90,11 @@ export const reconcileWorkerPool = action({
           appName: providerConfig.appName,
           image: providerConfig.image,
           region: providerConfig.region,
+          env: {
+            CONVEX_URL: convexUrl,
+            WORKSPACE_ID: workspaceId,
+            WORKER_ID: workerId,
+          },
         });
         await ctx.runMutation(internal.queue.upsertWorkerState, {
           workerId: created.workerId,

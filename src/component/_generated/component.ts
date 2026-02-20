@@ -49,6 +49,67 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         },
         Name
       >;
+      consumePairingCode: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          code: string;
+          nowMs?: number;
+          telegramChatId: string;
+          telegramUserId: string;
+        },
+        {
+          agentKey: string;
+          code: string;
+          consumerUserId: string;
+          createdAt: number;
+          expiresAt: number;
+          status: "pending" | "used" | "expired";
+          telegramChatId: null | string;
+          telegramUserId: null | string;
+          usedAt: null | number;
+        },
+        Name
+      >;
+      createPairingCode: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          agentKey: string;
+          consumerUserId: string;
+          nowMs?: number;
+          ttlMs?: number;
+        },
+        {
+          agentKey: string;
+          code: string;
+          consumerUserId: string;
+          createdAt: number;
+          expiresAt: number;
+          status: "pending" | "used" | "expired";
+          telegramChatId: null | string;
+          telegramUserId: null | string;
+          usedAt: null | number;
+        },
+        Name
+      >;
+      getPairingCodeStatus: FunctionReference<
+        "query",
+        "internal",
+        { code: string; nowMs?: number },
+        null | {
+          agentKey: string;
+          code: string;
+          consumerUserId: string;
+          createdAt: number;
+          expiresAt: number;
+          status: "pending" | "used" | "expired";
+          telegramChatId: null | string;
+          telegramUserId: null | string;
+          usedAt: null | number;
+        },
+        Name
+      >;
       getUserAgentBinding: FunctionReference<
         "query",
         "internal",
@@ -163,6 +224,50 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         string,
         Name
       >;
+      consumePairingCode: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          code: string;
+          nowMs?: number;
+          telegramChatId: string;
+          telegramUserId: string;
+        },
+        {
+          agentKey: string;
+          code: string;
+          consumerUserId: string;
+          createdAt: number;
+          expiresAt: number;
+          status: "pending" | "used" | "expired";
+          telegramChatId: null | string;
+          telegramUserId: null | string;
+          usedAt: null | number;
+        },
+        Name
+      >;
+      createPairingCode: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          agentKey: string;
+          consumerUserId: string;
+          nowMs?: number;
+          ttlMs?: number;
+        },
+        {
+          agentKey: string;
+          code: string;
+          consumerUserId: string;
+          createdAt: number;
+          expiresAt: number;
+          status: "pending" | "used" | "expired";
+          telegramChatId: null | string;
+          telegramUserId: null | string;
+          usedAt: null | number;
+        },
+        Name
+      >;
       enqueue: FunctionReference<
         "mutation",
         "internal",
@@ -199,6 +304,64 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           deadLettered: boolean;
           nextScheduledFor: null | number;
           requeued: boolean;
+        },
+        Name
+      >;
+      getHydrationBundle: FunctionReference<
+        "query",
+        "internal",
+        { messageId: string; workspaceId: string },
+        null | {
+          agentKey: string;
+          conversationId: string;
+          conversationState: {
+            contextHistory: Array<{
+              at: number;
+              content: string;
+              role: "system" | "user" | "assistant" | "tool";
+            }>;
+            pendingToolCalls: Array<{
+              callId: string;
+              status: "pending" | "running" | "done" | "failed";
+              toolName: string;
+            }>;
+          };
+          messageId: string;
+          payload: {
+            externalMessageId?: string;
+            messageText: string;
+            metadata?: Record<string, string>;
+            provider: string;
+            providerUserId: string;
+            rawUpdateJson?: string;
+          };
+          secretRefs: Array<string>;
+          secretValues: Record<string, string>;
+          snapshot: null | {
+            compiledPromptStack: Array<{ content: string; section: string }>;
+            memoryWindow: Array<{ excerpt: string; path: string }>;
+            skillsBundle: Array<{ manifestMd: string; skillKey: string }>;
+            snapshotId: string;
+            snapshotKey: string;
+          };
+          telegramBotToken: null | string;
+        },
+        Name
+      >;
+      getPairingCodeStatus: FunctionReference<
+        "query",
+        "internal",
+        { code: string; nowMs?: number },
+        null | {
+          agentKey: string;
+          code: string;
+          consumerUserId: string;
+          createdAt: number;
+          expiresAt: number;
+          status: "pending" | "used" | "expired";
+          telegramChatId: null | string;
+          telegramUserId: null | string;
+          usedAt: null | number;
         },
         Name
       >;
@@ -253,6 +416,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "action",
         "internal",
         {
+          convexUrl?: string;
           flyApiToken?: string;
           nowMs?: number;
           providerConfig?: {
@@ -271,6 +435,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             reconcileIntervalMs: number;
             spawnStep: number;
           };
+          workspaceId?: string;
         },
         {
           activeWorkers: number;
@@ -410,6 +575,47 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         },
         Name
       >;
+      getHydrationBundleForClaimedJob: FunctionReference<
+        "query",
+        "internal",
+        { messageId: string; workspaceId: string },
+        null | {
+          agentKey: string;
+          conversationId: string;
+          conversationState: {
+            contextHistory: Array<{
+              at: number;
+              content: string;
+              role: "system" | "user" | "assistant" | "tool";
+            }>;
+            pendingToolCalls: Array<{
+              callId: string;
+              status: "pending" | "running" | "done" | "failed";
+              toolName: string;
+            }>;
+          };
+          messageId: string;
+          payload: {
+            externalMessageId?: string;
+            messageText: string;
+            metadata?: Record<string, string>;
+            provider: string;
+            providerUserId: string;
+            rawUpdateJson?: string;
+          };
+          secretRefs: Array<string>;
+          secretValues: Record<string, string>;
+          snapshot: null | {
+            compiledPromptStack: Array<{ content: string; section: string }>;
+            memoryWindow: Array<{ excerpt: string; path: string }>;
+            skillsBundle: Array<{ manifestMd: string; skillKey: string }>;
+            snapshotId: string;
+            snapshotKey: string;
+          };
+          telegramBotToken: null | string;
+        },
+        Name
+      >;
       getQueueStats: FunctionReference<
         "query",
         "internal",
@@ -518,6 +724,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "action",
         "internal",
         {
+          convexUrl?: string;
           flyApiToken?: string;
           nowMs?: number;
           providerConfig?: {
@@ -536,6 +743,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             reconcileIntervalMs: number;
             spawnStep: number;
           };
+          workspaceId?: string;
         },
         {
           activeWorkers: number;

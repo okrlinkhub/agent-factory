@@ -107,4 +107,45 @@ describe("example", () => {
     const aliceRow = rows.find((row) => row._id === alice!._id);
     expect(aliceRow?.agentKey).toBe("default");
   });
+
+  test("pairing code lifecycle: create, consume, status", async () => {
+    const t = initConvexTest();
+    await t.mutation(api.example.seedDefaultAgent, {});
+    await t.mutation(api.example.seedExampleUsers, {});
+    const users = await t.query(api.example.listExampleUsers, {});
+    const alice = users.find((user) => user.handle === "alice");
+    expect(alice?._id).toBeDefined();
+
+    const created = await t.mutation(api.example.createPairingCode, {
+      consumerUserId: alice!._id,
+      agentKey: "default",
+      ttlMs: 60_000,
+    });
+    expect(created.status).toBe("pending");
+    expect(created.code.length).toBeGreaterThan(4);
+
+    const pending = await t.query(api.example.getPairingCodeStatus, {
+      code: created.code,
+    });
+    expect(pending?.status).toBe("pending");
+
+    const consumed = await t.mutation(api.example.consumePairingCode, {
+      code: created.code,
+      telegramUserId: "tg-user-77",
+      telegramChatId: "tg-chat-77",
+    });
+    expect(consumed.status).toBe("used");
+    expect(consumed.telegramChatId).toBe("tg-chat-77");
+
+    const used = await t.query(api.example.getPairingCodeStatus, {
+      code: created.code,
+    });
+    expect(used?.status).toBe("used");
+
+    const resolved = await t.query(api.example.resolveAgentForTelegram, {
+      telegramChatId: "tg-chat-77",
+    });
+    expect(resolved.consumerUserId).toBe(alice!._id);
+    expect(resolved.agentKey).toBe("default");
+  });
 });

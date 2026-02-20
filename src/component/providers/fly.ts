@@ -11,6 +11,7 @@ export type SpawnWorkerInput = {
   appName: string;
   image: string;
   region: string;
+  env?: Record<string, string>;
 };
 
 export type ProviderWorker = {
@@ -48,6 +49,7 @@ export class FlyMachinesProvider implements WorkerProvider {
         image: input.image,
         env: {
           AGENT_FACTORY_WORKER_ID: input.workerId,
+          ...input.env,
         },
       },
     };
