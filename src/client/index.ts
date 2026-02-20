@@ -141,7 +141,7 @@ export function exposeApi(
         ),
       },
       handler: async (ctx, args) => {
-        await options.auth(ctx, { type: "read" });
+        await options.auth(ctx, { type: "write", conversationId: args.conversationId });
         return await ctx.runMutation(component.lib.appendConversationMessages, args);
       },
     }),

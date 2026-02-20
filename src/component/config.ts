@@ -129,9 +129,9 @@ export const DEFAULT_CONFIG: AgentFactoryConfig = {
     jitterRatio: 0.1,
   },
   lease: {
-    leaseMs: 60_000,
+    leaseMs: 360_000,
     heartbeatIntervalMs: 15_000,
-    staleAfterMs: 90_000,
+    staleAfterMs: 420_000,
   },
   scaling: {
     minWorkers: 0,
