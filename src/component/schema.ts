@@ -141,6 +141,26 @@ export default defineSchema({
     .index("by_secretRef_and_active", ["secretRef", "active"])
     .index("by_active", ["active"]),
 
+  identityBindings: defineTable({
+    consumerUserId: v.string(),
+    agentKey: v.string(),
+    status: v.union(v.literal("active"), v.literal("revoked")),
+    source: v.union(
+      v.literal("manual"),
+      v.literal("telegram_pairing"),
+      v.literal("api"),
+    ),
+    telegramUserId: v.optional(v.string()),
+    telegramChatId: v.optional(v.string()),
+    metadata: v.optional(v.record(v.string(), v.string())),
+    boundAt: v.number(),
+    revokedAt: v.optional(v.number()),
+  })
+    .index("by_consumerUserId_and_status", ["consumerUserId", "status"])
+    .index("by_telegramUserId_and_status", ["telegramUserId", "status"])
+    .index("by_telegramChatId_and_status", ["telegramChatId", "status"])
+    .index("by_agentKey_and_status", ["agentKey", "status"]),
+
   workspaceDocuments: defineTable({
     workspaceId: v.string(),
     docType: v.union(

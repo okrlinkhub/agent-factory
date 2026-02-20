@@ -33,6 +33,12 @@ const claimedJobValidator = v.object({
   payload: queuePayloadValidator,
 });
 
+const secretStatusValidator = v.object({
+  secretRef: v.string(),
+  hasActive: v.boolean(),
+  version: v.union(v.null(), v.number()),
+});
+
 export const enqueueMessage = mutation({
   args: {
     conversationId: v.string(),
@@ -113,6 +119,100 @@ export const upsertAgentProfile = mutation({
     }
     await ctx.db.patch(existing._id, args);
     return existing._id;
+  },
+});
+
+export const importPlaintextSecret = mutation({
+  args: {
+    secretRef: v.string(),
+    plaintextValue: v.string(),
+    metadata: v.optional(v.record(v.string(), v.string())),
+  },
+  returns: v.object({
+    secretId: v.id("secrets"),
+    secretRef: v.string(),
+    version: v.number(),
+  }),
+  handler: async (ctx, args) => {
+    const history = await ctx.db
+      .query("secrets")
+      .withIndex("by_secretRef", (q) => q.eq("secretRef", args.secretRef))
+      .collect();
+
+    const nextVersion =
+      history.reduce((maxVersion, row) => Math.max(maxVersion, row.version), 0) + 1;
+    const previousActive = history.find((row) => row.active);
+    const encoded = encryptSecretValue(args.plaintextValue);
+
+    for (const row of history) {
+      if (row.active) {
+        await ctx.db.patch(row._id, { active: false });
+      }
+    }
+
+    const secretId = await ctx.db.insert("secrets", {
+      secretRef: args.secretRef,
+      version: nextVersion,
+      encryptedValue: encoded,
+      keyId: "component-local",
+      algorithm: "xor-hex-v1",
+      active: true,
+      rotatedFrom: previousActive?.version,
+      metadata: args.metadata,
+    });
+
+    return {
+      secretId,
+      secretRef: args.secretRef,
+      version: nextVersion,
+    };
+  },
+});
+
+export const getSecretsStatus = query({
+  args: {
+    secretRefs: v.array(v.string()),
+  },
+  returns: v.array(secretStatusValidator),
+  handler: async (ctx, args) => {
+    const statuses: Array<{
+      secretRef: string;
+      hasActive: boolean;
+      version: number | null;
+    }> = [];
+    for (const ref of args.secretRefs) {
+      const active = await ctx.db
+        .query("secrets")
+        .withIndex("by_secretRef_and_active", (q) =>
+          q.eq("secretRef", ref).eq("active", true),
+        )
+        .unique();
+      statuses.push({
+        secretRef: ref,
+        hasActive: active !== null,
+        version: active?.version ?? null,
+      });
+    }
+    return statuses;
+  },
+});
+
+export const getActiveSecretPlaintext = internalQuery({
+  args: {
+    secretRef: v.string(),
+  },
+  returns: v.union(v.null(), v.string()),
+  handler: async (ctx, args) => {
+    const active = await ctx.db
+      .query("secrets")
+      .withIndex("by_secretRef_and_active", (q) =>
+        q.eq("secretRef", args.secretRef).eq("active", true),
+      )
+      .unique();
+    if (!active) {
+      return null;
+    }
+    return decryptSecretValue(active.encryptedValue, active.algorithm);
   },
 });
 
@@ -935,4 +1035,36 @@ function estimateTokens(
     0,
   );
   return Math.ceil((sectionChars + memoryChars) / 4);
+}
+
+function encryptSecretValue(plaintext: string): string {
+  const units = Array.from(plaintext);
+  return units
+    .map((char, index) => {
+      const code = char.charCodeAt(0);
+      const mask = 11 + (index % 7);
+      return (code ^ mask).toString(16).padStart(4, "0");
+    })
+    .join("");
+}
+
+function decryptSecretValue(encryptedValue: string, algorithm: string): string {
+  if (algorithm !== "xor-hex-v1") {
+    throw new Error(`Unsupported secret algorithm '${algorithm}'`);
+  }
+  if (encryptedValue.length % 4 !== 0) {
+    throw new Error("Invalid secret payload");
+  }
+
+  let out = "";
+  for (let i = 0; i < encryptedValue.length; i += 4) {
+    const chunk = encryptedValue.slice(i, i + 4);
+    const value = Number.parseInt(chunk, 16);
+    if (Number.isNaN(value)) {
+      throw new Error("Invalid secret payload");
+    }
+    const mask = 11 + ((i / 4) % 7);
+    out += String.fromCharCode(value ^ mask);
+  }
+  return out;
 }

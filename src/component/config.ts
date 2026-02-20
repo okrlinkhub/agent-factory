@@ -153,7 +153,7 @@ export const DEFAULT_CONFIG: AgentFactoryConfig = {
     kind: "fly",
     appName: "agent-factory-workers",
     organizationSlug: "personal",
-    image: "ghcr.io/okrlinkhub/openclaw-worker:latest",
+    image: "registry.fly.io/agent-factory-workers:deployment-01KHWQBVHF07FYAE7P093XYHD6",
     region: "ams",
   },
 };

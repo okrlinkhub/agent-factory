@@ -43,11 +43,14 @@ export const enqueueTelegramMessage = mutation({
 });
 ```
 
-Workers should then call:
+After enqueue, your **consumer application runtime** must process the queue by calling:
 - `components.agentFactory.lib.claim`
 - `components.agentFactory.lib.getHydrationBundle`
 - `components.agentFactory.lib.heartbeat`
 - `components.agentFactory.lib.complete` or `components.agentFactory.lib.fail`
+
+This package does not run a queue processor by itself.  
+If you run a gateway-only image (for example an OpenClaw gateway container), it is normal to see jobs remain `queued` until your consumer runtime executes the loop above.
 
 ### HTTP Routes
 
@@ -70,14 +73,39 @@ export default http;
 This exposes:
 - `POST /agent-factory/telegram/webhook` -> enqueue-only (no business processing)
 
+Important: the webhook/router only receives ingress and enqueues. The dequeue/processing loop must run in your consumer app (for example Next.js/Vite backend runtime, server worker, or a dedicated process you own).
+
+### One-time Telegram pairing and internal user mapping
+
+The component can keep the user-to-agent mapping internally through `identityBindings`.
+You can bind your consumer user id directly to an `agentKey` without managing a custom
+table in the consumer app.
+
+Typical one-time pairing flow:
+
+1. Your app authenticates the user and generates a one-time token.
+2. User opens Telegram deep-link (`/start <token>`).
+3. Your backend validates the token and calls:
+   - `components.agentFactory.lib.bindUserAgent` with:
+     - `consumerUserId`
+     - `agentKey`
+     - optional `telegramUserId` / `telegramChatId`
+4. Webhook ingress can resolve the binding internally and enqueue with the mapped
+   `agentKey`.
+
+`registerRoutes(...)` supports this behavior with:
+- `resolveAgentKeyFromBinding` (default `true`)
+- `fallbackAgentKey` (default `"default"`)
+- `requireBindingForTelegram` (default `false`, when `true` rejects unbound users)
+
 ## Architecture
 
 ```mermaid
 flowchart LR
-  telegramWebhook[TelegramWebhook] --> appRouter[NextOrViteRouter]
+  telegramWebhook[TelegramWebhook] --> appRouter[Consumer Router NextOrVite]
   appRouter --> enqueueMutation[ConvexEnqueueMutation]
   enqueueMutation --> messageQueue[ConvexMessageQueue]
-  messageQueue --> claimLoop[FlyWorkerPollAndClaim]
+  messageQueue --> claimLoop[Consumer Processing Loop]
   claimLoop --> hydrateStep[HydrateFromConvex]
   hydrateStep --> runEngine[OpenClawEngineExecution]
   runEngine --> telegramSend[TelegramDirectReply]
@@ -85,7 +113,8 @@ flowchart LR
   heartbeatLease --> cleanupTask[PeriodicLeaseCleanup]
   cleanupTask --> messageQueue
   schedulerNode[ConvexSchedulerAndAutoscaler] --> flyProvider[FlyMachinesProvider]
-  flyProvider --> claimLoop
+  flyProvider --> consumerRuntime[Consumer-owned Runtime]
+  consumerRuntime --> claimLoop
 ```
 
 ## Data model

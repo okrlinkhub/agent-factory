@@ -1,5 +1,7 @@
 export {
   upsertAgentProfile as configureAgent,
+  importPlaintextSecret as importSecret,
+  getSecretsStatus as secretStatus,
   enqueueMessage as enqueue,
   claimNextJob as claim,
   heartbeatJob as heartbeat,
@@ -7,6 +9,15 @@ export {
   failJob as fail,
   getHydrationBundleForClaimedJob as getHydrationBundle,
   getQueueStats as queueStats,
+  getWorkerStats as workerStats,
 } from "./queue.js";
 
 export { reconcileWorkerPool as reconcileWorkers } from "./scheduler.js";
+
+export {
+  bindUserAgent,
+  revokeUserAgentBinding,
+  resolveAgentForUser,
+  resolveAgentForTelegram,
+  getUserAgentBinding,
+} from "./identity.js";

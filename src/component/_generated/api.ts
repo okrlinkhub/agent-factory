@@ -9,6 +9,7 @@
  */
 
 import type * as config from "../config.js";
+import type * as identity from "../identity.js";
 import type * as lib from "../lib.js";
 import type * as providers_fly from "../providers/fly.js";
 import type * as queue from "../queue.js";
@@ -23,6 +24,7 @@ import { anyApi, componentsGeneric } from "convex/server";
 
 const fullApi: ApiFromModules<{
   config: typeof config;
+  identity: typeof identity;
   lib: typeof lib;
   "providers/fly": typeof providers_fly;
   queue: typeof queue;

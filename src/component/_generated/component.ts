@@ -23,7 +23,97 @@ import type { FunctionReference } from "convex/server";
  */
 export type ComponentApi<Name extends string | undefined = string | undefined> =
   {
+    identity: {
+      bindUserAgent: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          agentKey: string;
+          consumerUserId: string;
+          metadata?: Record<string, string>;
+          nowMs?: number;
+          source?: "manual" | "telegram_pairing" | "api";
+          telegramChatId?: string;
+          telegramUserId?: string;
+        },
+        {
+          agentKey: string;
+          boundAt: number;
+          consumerUserId: string;
+          metadata: null | Record<string, string>;
+          revokedAt: null | number;
+          source: "manual" | "telegram_pairing" | "api";
+          status: "active" | "revoked";
+          telegramChatId: null | string;
+          telegramUserId: null | string;
+        },
+        Name
+      >;
+      getUserAgentBinding: FunctionReference<
+        "query",
+        "internal",
+        { consumerUserId: string },
+        null | {
+          agentKey: string;
+          boundAt: number;
+          consumerUserId: string;
+          metadata: null | Record<string, string>;
+          revokedAt: null | number;
+          source: "manual" | "telegram_pairing" | "api";
+          status: "active" | "revoked";
+          telegramChatId: null | string;
+          telegramUserId: null | string;
+        },
+        Name
+      >;
+      resolveAgentForTelegram: FunctionReference<
+        "query",
+        "internal",
+        { telegramChatId?: string; telegramUserId?: string },
+        { agentKey: null | string; consumerUserId: null | string },
+        Name
+      >;
+      resolveAgentForUser: FunctionReference<
+        "query",
+        "internal",
+        { consumerUserId: string },
+        { agentKey: null | string; consumerUserId: string },
+        Name
+      >;
+      revokeUserAgentBinding: FunctionReference<
+        "mutation",
+        "internal",
+        { consumerUserId: string; nowMs?: number },
+        { revoked: number },
+        Name
+      >;
+    };
     lib: {
+      bindUserAgent: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          agentKey: string;
+          consumerUserId: string;
+          metadata?: Record<string, string>;
+          nowMs?: number;
+          source?: "manual" | "telegram_pairing" | "api";
+          telegramChatId?: string;
+          telegramUserId?: string;
+        },
+        {
+          agentKey: string;
+          boundAt: number;
+          consumerUserId: string;
+          metadata: null | Record<string, string>;
+          revokedAt: null | number;
+          source: "manual" | "telegram_pairing" | "api";
+          status: "active" | "revoked";
+          telegramChatId: null | string;
+          telegramUserId: null | string;
+        },
+        Name
+      >;
       claim: FunctionReference<
         "mutation",
         "internal",
@@ -112,6 +202,23 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         },
         Name
       >;
+      getUserAgentBinding: FunctionReference<
+        "query",
+        "internal",
+        { consumerUserId: string },
+        null | {
+          agentKey: string;
+          boundAt: number;
+          consumerUserId: string;
+          metadata: null | Record<string, string>;
+          revokedAt: null | number;
+          source: "manual" | "telegram_pairing" | "api";
+          status: "active" | "revoked";
+          telegramChatId: null | string;
+          telegramUserId: null | string;
+        },
+        Name
+      >;
       heartbeat: FunctionReference<
         "mutation",
         "internal",
@@ -122,6 +229,17 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           workerId: string;
         },
         boolean,
+        Name
+      >;
+      importSecret: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          metadata?: Record<string, string>;
+          plaintextValue: string;
+          secretRef: string;
+        },
+        { secretId: string; secretRef: string; version: number },
         Name
       >;
       queueStats: FunctionReference<
@@ -135,7 +253,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "action",
         "internal",
         {
-          flyApiToken: string;
+          flyApiToken?: string;
           nowMs?: number;
           providerConfig?: {
             appName: string;
@@ -159,6 +277,62 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           desiredWorkers: number;
           spawned: number;
           terminated: number;
+        },
+        Name
+      >;
+      resolveAgentForTelegram: FunctionReference<
+        "query",
+        "internal",
+        { telegramChatId?: string; telegramUserId?: string },
+        { agentKey: null | string; consumerUserId: null | string },
+        Name
+      >;
+      resolveAgentForUser: FunctionReference<
+        "query",
+        "internal",
+        { consumerUserId: string },
+        { agentKey: null | string; consumerUserId: string },
+        Name
+      >;
+      revokeUserAgentBinding: FunctionReference<
+        "mutation",
+        "internal",
+        { consumerUserId: string; nowMs?: number },
+        { revoked: number },
+        Name
+      >;
+      secretStatus: FunctionReference<
+        "query",
+        "internal",
+        { secretRefs: Array<string> },
+        Array<{
+          hasActive: boolean;
+          secretRef: string;
+          version: null | number;
+        }>,
+        Name
+      >;
+      workerStats: FunctionReference<
+        "query",
+        "internal",
+        {},
+        {
+          activeCount: number;
+          idleCount: number;
+          workers: Array<{
+            appName: null | string;
+            heartbeatAt: number;
+            load: number;
+            machineId: null | string;
+            status:
+              | "starting"
+              | "active"
+              | "idle"
+              | "draining"
+              | "stopped"
+              | "failed";
+            workerId: string;
+          }>;
         },
         Name
       >;
@@ -243,6 +417,17 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         { deadLetter: number; processing: number; queuedReady: number },
         Name
       >;
+      getSecretsStatus: FunctionReference<
+        "query",
+        "internal",
+        { secretRefs: Array<string> },
+        Array<{
+          hasActive: boolean;
+          secretRef: string;
+          version: null | number;
+        }>,
+        Name
+      >;
       getWorkerStats: FunctionReference<
         "query",
         "internal",
@@ -277,6 +462,17 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           workerId: string;
         },
         boolean,
+        Name
+      >;
+      importPlaintextSecret: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          metadata?: Record<string, string>;
+          plaintextValue: string;
+          secretRef: string;
+        },
+        { secretId: string; secretRef: string; version: number },
         Name
       >;
       listJobsByStatus: FunctionReference<
@@ -322,7 +518,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "action",
         "internal",
         {
-          flyApiToken: string;
+          flyApiToken?: string;
           nowMs?: number;
           providerConfig?: {
             appName: string;

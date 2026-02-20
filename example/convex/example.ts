@@ -1,4 +1,4 @@
-import { action, mutation } from "./_generated/server.js";
+import { mutation, query } from "./_generated/server.js";
 import { components } from "./_generated/api.js";
 import { exposeApi } from "@okrlinkhub/agent-factory";
 import { v } from "convex/values";
@@ -20,23 +20,6 @@ export const enqueueTelegramMessage = mutation({
   },
 });
 
-export const seedDefaultAgent = mutation({
-  args: {},
-  handler: async (ctx) => {
-    await getAuthUserId(ctx);
-    return await ctx.runMutation(components.agentFactory.lib.configureAgent, {
-      agentKey: "default",
-      version: "1.0.0",
-      soulMd: "# Soul",
-      clientMd: "# Client",
-      skills: ["agent-bridge"],
-      runtimeConfig: { model: "gpt-5" },
-      secretsRef: ["telegram.botToken"],
-      enabled: true,
-    });
-  },
-});
-
 export const claimForWorker = mutation({
   args: { workerId: v.string() },
   handler: async (ctx, args) => {
@@ -46,16 +29,98 @@ export const claimForWorker = mutation({
   },
 });
 
-export const reconcileWorkers = action({
-  args: { flyApiToken: v.string() },
-  handler: async (ctx, args) => {
-    return await ctx.runAction(components.agentFactory.lib.reconcileWorkers, {
-      flyApiToken: args.flyApiToken,
-    });
+export const seedExampleUsers = mutation({
+  args: {},
+  returns: v.object({
+    inserted: v.number(),
+  }),
+  handler: async (ctx) => {
+    await getAuthUserId(ctx);
+    const seeds = [
+      { handle: "alice", displayName: "Alice Example" },
+      { handle: "bob", displayName: "Bob Example" },
+      { handle: "carol", displayName: "Carol Example" },
+    ];
+
+    let inserted = 0;
+    for (const seed of seeds) {
+      const existing = await ctx.db
+        .query("users")
+        .withIndex("by_handle", (q) => q.eq("handle", seed.handle))
+        .unique();
+      if (!existing) {
+        await ctx.db.insert("users", seed);
+        inserted += 1;
+      }
+    }
+    return { inserted };
   },
 });
 
-export const { enqueue, queueStats } = exposeApi(components.agentFactory, {
+export const listExampleUsers = query({
+  args: {},
+  returns: v.array(
+    v.object({
+      _id: v.id("users"),
+      displayName: v.string(),
+      handle: v.string(),
+    }),
+  ),
+  handler: async (ctx) => {
+    const users = await ctx.db.query("users").collect();
+    return users
+      .map((user) => ({
+        _id: user._id,
+        displayName: user.displayName,
+        handle: user.handle,
+      }))
+      .sort((a, b) => a.displayName.localeCompare(b.displayName));
+  },
+});
+
+export const listUsersWithBindings = query({
+  args: {},
+  returns: v.array(
+    v.object({
+      _id: v.id("users"),
+      displayName: v.string(),
+      handle: v.string(),
+      agentKey: v.union(v.null(), v.string()),
+    }),
+  ),
+  handler: async (ctx) => {
+    await getAuthUserId(ctx);
+    const users = await ctx.db.query("users").collect();
+    const withBindings = [];
+    for (const user of users) {
+      const resolved = await ctx.runQuery(components.agentFactory.lib.resolveAgentForUser, {
+        consumerUserId: user._id,
+      });
+      withBindings.push({
+        _id: user._id,
+        displayName: user.displayName,
+        handle: user.handle,
+        agentKey: resolved.agentKey,
+      });
+    }
+    return withBindings.sort((a, b) => a.displayName.localeCompare(b.displayName));
+  },
+});
+
+export const {
+  enqueue,
+  queueStats,
+  workerStats,
+  seedDefaultAgent,
+  importSecret,
+  secretStatus,
+  startWorkers,
+  bindUserAgent,
+  revokeUserAgentBinding,
+  myAgentKey,
+  getUserAgentBinding,
+  resolveAgentForTelegram,
+} = exposeApi(components.agentFactory, {
   auth: async (ctx, operation) => {
     const userId = await getAuthUserId(ctx);
     if (userId === null && operation.type === "write") {
@@ -64,6 +129,10 @@ export const { enqueue, queueStats } = exposeApi(components.agentFactory, {
     return userId;
   },
 });
+
+export const reconcileWorkers = startWorkers;
+export const importPairingSecret = importSecret;
+export const pairUserToAgent = bindUserAgent;
 
 async function getAuthUserId(ctx: { auth: Auth }) {
   return (await ctx.auth.getUserIdentity())?.subject ?? "anonymous";

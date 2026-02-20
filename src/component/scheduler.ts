@@ -10,7 +10,7 @@ import { FlyMachinesProvider, type WorkerProvider } from "./providers/fly.js";
 
 export const reconcileWorkerPool = action({
   args: {
-    flyApiToken: v.string(),
+    flyApiToken: v.optional(v.string()),
     nowMs: v.optional(v.number()),
     scalingPolicy: v.optional(scalingPolicyValidator),
     providerConfig: v.optional(providerConfigValidator),
@@ -25,7 +25,17 @@ export const reconcileWorkerPool = action({
     const nowMs = args.nowMs ?? Date.now();
     const scaling = args.scalingPolicy ?? DEFAULT_CONFIG.scaling;
     const providerConfig = args.providerConfig ?? DEFAULT_CONFIG.provider;
-    const provider = resolveProvider(providerConfig.kind, args.flyApiToken);
+    const flyApiToken =
+      args.flyApiToken ??
+      (await ctx.runQuery(internal.queue.getActiveSecretPlaintext, {
+        secretRef: "fly.apiToken",
+      }));
+    if (!flyApiToken) {
+      throw new Error(
+        "Missing Fly API token. Import an active 'fly.apiToken' secret or pass flyApiToken explicitly.",
+      );
+    }
+    const provider = resolveProvider(providerConfig.kind, flyApiToken);
 
     const queueStats: {
       queuedReady: number;

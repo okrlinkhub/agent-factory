@@ -1,4 +1,5 @@
 import {
+  actionGeneric,
   httpActionGeneric,
   mutationGeneric,
   queryGeneric,
@@ -63,6 +64,118 @@ export function exposeApi(
         });
       },
     }),
+    workerStats: queryGeneric({
+      args: {},
+      handler: async (ctx) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runQuery(component.lib.workerStats, {});
+      },
+    }),
+    seedDefaultAgent: mutationGeneric({
+      args: {},
+      handler: async (ctx) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runMutation(component.lib.configureAgent, {
+          agentKey: "default",
+          version: "1.0.0",
+          soulMd: "# Soul",
+          clientMd: "# Client",
+          skills: ["agent-bridge"],
+          runtimeConfig: { model: "gpt-5" },
+          secretsRef: ["telegram.botToken"],
+          enabled: true,
+        });
+      },
+    }),
+    importSecret: mutationGeneric({
+      args: {
+        secretRef: v.string(),
+        plaintextValue: v.string(),
+        metadata: v.optional(v.record(v.string(), v.string())),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runMutation(component.lib.importSecret, args);
+      },
+    }),
+    secretStatus: queryGeneric({
+      args: {
+        secretRefs: v.array(v.string()),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runQuery(component.lib.secretStatus, {
+          secretRefs: args.secretRefs,
+        });
+      },
+    }),
+    startWorkers: actionGeneric({
+      args: {
+        flyApiToken: v.optional(v.string()),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runAction(component.lib.reconcileWorkers, {
+          flyApiToken: args.flyApiToken,
+        });
+      },
+    }),
+    bindUserAgent: mutationGeneric({
+      args: {
+        consumerUserId: v.string(),
+        agentKey: v.string(),
+        source: v.optional(
+          v.union(v.literal("manual"), v.literal("telegram_pairing"), v.literal("api")),
+        ),
+        telegramUserId: v.optional(v.string()),
+        telegramChatId: v.optional(v.string()),
+        metadata: v.optional(v.record(v.string(), v.string())),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runMutation(component.lib.bindUserAgent, args);
+      },
+    }),
+    revokeUserAgentBinding: mutationGeneric({
+      args: {
+        consumerUserId: v.string(),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runMutation(component.lib.revokeUserAgentBinding, args);
+      },
+    }),
+    myAgentKey: queryGeneric({
+      args: {
+        consumerUserId: v.optional(v.string()),
+      },
+      handler: async (ctx, args) => {
+        const authUserId = await options.auth(ctx, { type: "read" });
+        const consumerUserId = args.consumerUserId ?? authUserId;
+        return await ctx.runQuery(component.lib.resolveAgentForUser, {
+          consumerUserId,
+        });
+      },
+    }),
+    getUserAgentBinding: queryGeneric({
+      args: {
+        consumerUserId: v.string(),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runQuery(component.lib.getUserAgentBinding, args);
+      },
+    }),
+    resolveAgentForTelegram: queryGeneric({
+      args: {
+        telegramUserId: v.optional(v.string()),
+        telegramChatId: v.optional(v.string()),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runQuery(component.lib.resolveAgentForTelegram, args);
+      },
+    }),
   };
 }
 
@@ -76,9 +189,15 @@ export function registerRoutes(
   {
     pathPrefix = "/agent-factory",
     resolveAgentKey,
+    resolveAgentKeyFromBinding = true,
+    fallbackAgentKey = "default",
+    requireBindingForTelegram = false,
   }: {
     pathPrefix?: string;
     resolveAgentKey?: (update: unknown) => string;
+    resolveAgentKeyFromBinding?: boolean;
+    fallbackAgentKey?: string;
+    requireBindingForTelegram?: boolean;
   } = {},
 ) {
   http.route({
@@ -103,13 +222,31 @@ export function registerRoutes(
         });
       }
 
-      const agentKey = resolveAgentKey ? resolveAgentKey(update) : "default";
+      const telegramUserId = String(message.from.id);
+      const telegramChatId = String(message.chat.id);
+      const mapped = resolveAgentKeyFromBinding
+        ? await ctx.runQuery(component.lib.resolveAgentForTelegram, {
+            telegramUserId,
+            telegramChatId,
+          })
+        : { consumerUserId: null, agentKey: null };
+      const configuredAgentKey = resolveAgentKey ? resolveAgentKey(update) : null;
+      const agentKey = configuredAgentKey ?? mapped.agentKey ?? fallbackAgentKey;
+      if (!agentKey || (requireBindingForTelegram && !configuredAgentKey && !mapped.agentKey)) {
+        return new Response(
+          JSON.stringify({ ok: false, error: "no active binding for telegram user" }),
+          {
+            status: 403,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
       await ctx.runMutation(component.lib.enqueue, {
-        conversationId: `telegram:${message.chat.id}`,
+        conversationId: `telegram:${telegramChatId}`,
         agentKey,
         payload: {
           provider: "telegram",
-          providerUserId: String(message.from.id),
+          providerUserId: telegramUserId,
           messageText: message.text,
           externalMessageId: String(message.message_id ?? update.update_id ?? ""),
           rawUpdateJson: JSON.stringify(update),
