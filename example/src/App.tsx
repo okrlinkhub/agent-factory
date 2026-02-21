@@ -16,7 +16,7 @@ function App() {
   const users = useQuery(api.example.listExampleUsers, {});
   const usersWithBindings = useQuery(api.example.listUsersWithBindings, {});
   const secretsStatus = useQuery(api.example.secretStatus, {
-    secretRefs: ["telegram.botToken", "fly.apiToken"],
+    secretRefs: ["convex.url", "telegram.botToken", "fly.apiToken"],
   });
   const [latestPairingCode, setLatestPairingCode] = useState("");
   const pairingStatus = useQuery(
@@ -25,6 +25,7 @@ function App() {
   );
   const [chatId, setChatId] = useState("947270381897662534");
   const [messageText, setMessageText] = useState("Ciao da Telegram ingress");
+  const [convexSecretUrl, setConvexSecretUrl] = useState(import.meta.env.VITE_CONVEX_URL ?? "");
   const [telegramBotToken, setTelegramBotToken] = useState("");
   const [flyApiToken, setFlyApiToken] = useState("");
   const [seedResult, setSeedResult] = useState<string | null>(null);
@@ -40,6 +41,7 @@ function App() {
   const [telegramChatIdForBinding, setTelegramChatIdForBinding] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const convexUrl = import.meta.env.VITE_CONVEX_URL.replace(".cloud", ".site");
+  const convexSecretStatus = (secretsStatus ?? []).find((item) => item.secretRef === "convex.url");
 
   const enqueueMessage = async () => {
     setBusy("enqueue");
@@ -171,6 +173,47 @@ function App() {
             borderRadius: "8px",
           }}
         >
+          <h3>0) Mandatory: configure convex.url secret</h3>
+          <p style={{ marginTop: 0, marginBottom: "0.5rem" }}>
+            Prima di avviare autoscaling/cron, salva <code>convex.url</code> nel secret store del
+            componente.
+          </p>
+          <p style={{ marginTop: 0, marginBottom: "0.75rem", fontSize: "0.9rem" }}>
+            Stato attuale:{" "}
+            <strong>
+              {convexSecretStatus?.hasActive
+                ? `already set (v${convexSecretStatus.version ?? "?"})`
+                : "missing"}
+            </strong>
+          </p>
+          <div style={{ marginBottom: "0.75rem" }}>
+            <input
+              value={convexSecretUrl}
+              onChange={(event) => setConvexSecretUrl(event.target.value)}
+              placeholder="https://<deployment>.convex.cloud"
+              style={{ marginRight: "0.5rem", padding: "0.5rem", width: "55%" }}
+            />
+            <button
+              onClick={() => saveSecret("convex.url", convexSecretUrl)}
+              disabled={busy !== null || convexSecretUrl.trim().length === 0}
+            >
+              Import convex.url
+            </button>
+          </div>
+          <p style={{ marginTop: 0, marginBottom: 0, fontSize: "0.85rem" }}>
+            Se il secret non e` impostato, il cron reconcile fallisce con errore
+            <code> Missing Convex URL</code>.
+          </p>
+          {secretResult ? <p style={{ marginTop: "0.5rem" }}>{secretResult}</p> : null}
+        </div>
+        <div
+          style={{
+            marginBottom: "1rem",
+            padding: "1rem",
+            backgroundColor: "rgba(128, 128, 128, 0.1)",
+            borderRadius: "8px",
+          }}
+        >
           <h3>1) Seed Agent</h3>
           <p style={{ marginTop: 0, marginBottom: "0.75rem" }}>
             Crea/aggiorna il profilo `default` usando la logica del componente.
@@ -251,7 +294,6 @@ function App() {
               </span>
             ))}
           </p>
-          {secretResult ? <p style={{ marginTop: "0.5rem" }}>{secretResult}</p> : null}
         </div>
         <div
           style={{

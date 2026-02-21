@@ -22,6 +22,48 @@ export default app;
 
 ## Usage
 
+### First required setup: mandatory secrets for every worker/agent
+
+Before running worker autoscaling (enqueue trigger, cron, or manual reconcile), you must
+store **both** secrets in the component secret store:
+
+- `convex.url`
+- `fly.apiToken`
+
+Every spawned worker/agent needs these values at runtime. Manual "Start Workers" can work
+when you pass values inline from the UI, but automatic paths (enqueue + cron) rely on
+these stored secrets.
+
+If one is missing, reconcile fails with errors like:
+- `Missing Convex URL. Import an active 'convex.url' secret or pass convexUrl explicitly.`
+- `Missing Fly API token. Import an active 'fly.apiToken' secret or pass flyApiToken explicitly.`
+
+Set them once:
+
+```sh
+npx convex run example:importSecret '{
+  "secretRef": "convex.url",
+  "plaintextValue": "https://<your-convex-deployment>.convex.cloud"
+}'
+
+npx convex run example:importSecret '{
+  "secretRef": "fly.apiToken",
+  "plaintextValue": "fly_XXXXXXXXXXXXXXXX"
+}'
+```
+
+Verify status:
+
+```sh
+npx convex run example:secretStatus '{
+  "secretRefs": ["convex.url", "fly.apiToken", "telegram.botToken"]
+}'
+```
+
+In the example UI (`example/src/App.tsx`), this is shown as step
+`0) Mandatory: configure convex.url secret`; make sure `fly.apiToken` is also imported
+as an active component secret.
+
 ```ts
 import { components } from "./_generated/api";
 import { mutation } from "./_generated/server";
@@ -49,9 +91,36 @@ After enqueue, a **queue processor runtime** must process the queue by calling:
 - `components.agentFactory.lib.heartbeat`
 - `components.agentFactory.lib.complete` or `components.agentFactory.lib.fail`
 
+Worker autoscaling reconcile now follows a hybrid model:
+- `enqueue` schedules an immediate async reconcile trigger (`runAfter(0, ...)`)
+- a periodic cron fallback is still recommended to recover from missed triggers
+- desired worker count is conversation-aware, so multiple queued messages on the same `conversationId` do not over-scale worker spawn
+
 In this project setup, the queue processor runtime is **Fly worker-only** (not the consumer webhook app).
 The consumer app receives ingress and enqueues, while Fly workers dequeue and execute jobs.
 The worker should consume tenant-specific tokens from the hydration payload (resolved by the component), not from global Fly env vars.
+
+### Cron fallback every 5 minutes
+
+In your Convex app, add a cron fallback for reconcile:
+
+```ts
+import { cronJobs } from "convex/server";
+import { api } from "./_generated/api";
+
+const crons = cronJobs();
+
+crons.interval(
+  "agent-factory reconcile workers fallback",
+  { minutes: 5 },
+  api.example.startWorkers,
+  {},
+);
+
+export default crons;
+```
+
+This cron is a safety net. The primary path remains enqueue-triggered reconcile.
 
 ### LLM configuration (Fly env)
 
@@ -216,6 +285,42 @@ The current provider implementation uses Fly Machines API endpoints for:
 - list machines
 - cordon machine
 - terminate machine
+
+### Worker image update procedure (local builder, no Depot)
+
+When you update the worker runtime (for example in `openclaw-okr-image/worker.mjs`), use this flow to publish and roll out safely.
+
+1) Deploy with Fly local builder (explicitly disabling Depot):
+
+```sh
+cd /path/to/openclaw-okr-image
+fly deploy --local-only --depot=false --yes
+```
+
+2) If deployment fails with `CONVEX_URL not set`, set the secret and retry:
+
+```sh
+fly secrets set CONVEX_URL="https://<your-convex-deployment>.convex.cloud" -a agent-factory-workers
+```
+
+3) Capture the new image tag from deploy output (for example
+`registry.fly.io/agent-factory-workers:deployment-XXXXXXXXXXXX`), then update
+`src/component/config.ts` in this repo:
+
+```ts
+export const DEFAULT_WORKER_IMAGE =
+  "registry.fly.io/agent-factory-workers:deployment-XXXXXXXXXXXX";
+```
+
+4) Verify rollout:
+
+```sh
+fly status -a agent-factory-workers
+fly logs -a agent-factory-workers --no-tail
+```
+
+5) (Recommended) Commit the `DEFAULT_WORKER_IMAGE` update so scheduler-driven
+spawns use the exact image that was just deployed.
 
 Recommended runtime split:
 - Consumer app (Next.js/Vercel): webhook ingress + enqueue only

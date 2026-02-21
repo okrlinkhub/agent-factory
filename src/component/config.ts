@@ -27,7 +27,6 @@ export type ScalingPolicy = {
   maxWorkers: number;
   queuePerWorkerTarget: number;
   spawnStep: number;
-  drainStep: number;
   idleTimeoutMs: number;
   reconcileIntervalMs: number;
 };
@@ -61,7 +60,7 @@ export type AgentFactoryConfig = {
 };
 
 export const DEFAULT_WORKER_IMAGE =
-  "registry.fly.io/agent-factory-workers:deployment-01KHZM3XXQW1YG8DA1V3KEW6WV";
+  "registry.fly.io/agent-factory-workers:deployment-01KHZQWMNHF3PJGKGM1RJASPRG";
 export const DEFAULT_WORKER_VOLUME_NAME = "openclaw_data";
 export const DEFAULT_WORKER_VOLUME_PATH = "/data";
 export const DEFAULT_WORKER_RUNTIME_ENV: Record<string, string> = {
@@ -106,7 +105,6 @@ export const scalingPolicyValidator = v.object({
   maxWorkers: v.number(),
   queuePerWorkerTarget: v.number(),
   spawnStep: v.number(),
-  drainStep: v.number(),
   idleTimeoutMs: v.number(),
   reconcileIntervalMs: v.number(),
 });
@@ -165,7 +163,6 @@ export const DEFAULT_CONFIG: AgentFactoryConfig = {
     maxWorkers: 1,
     queuePerWorkerTarget: 5,
     spawnStep: 1,
-    drainStep: 1,
     idleTimeoutMs: 300_000,
     reconcileIntervalMs: 15_000,
   },

@@ -105,7 +105,7 @@ describe("component lib", () => {
     expect(afterRevoke.agentKey).toBeNull();
   });
 
-  test("worker scheduling should set idle shutdown from last claim", async () => {
+  test("worker scheduling should set idle shutdown from completion time", async () => {
     const t = initConvexTest();
     const now = Date.now();
     vi.setSystemTime(now);
@@ -130,6 +130,9 @@ describe("component lib", () => {
     const claim = await t.mutation(api.lib.claim, { workerId: "worker-2" });
     expect(claim).not.toBeNull();
     expect(claim?.messageId).toBe(messageId);
+
+    const completionTime = now + 60_000;
+    vi.setSystemTime(completionTime);
     const completed = await t.mutation(api.lib.complete, {
       workerId: "worker-2",
       messageId,
@@ -138,26 +141,179 @@ describe("component lib", () => {
     expect(completed).toBe(true);
     const workers = await t.query((internal.queue as any).listWorkersForScheduler, {});
     const worker = workers.find((row: { workerId: string }) => row.workerId === "worker-2");
-    expect(worker?.status).toBe("idle");
-    expect(worker?.scheduledShutdownAt).toBe(now + 300_000);
+    expect(worker?.status).toBe("active");
+    expect(worker?.load).toBe(0);
+    expect(worker?.scheduledShutdownAt).toBe(completionTime + 300_000);
   });
 
-  test("drain request should require snapshot ack", async () => {
+  test("worker control state should signal stop for stopped worker", async () => {
     const t = initConvexTest();
     await t.mutation(internal.queue.upsertWorkerState, {
-      workerId: "worker-drain-1",
+      workerId: "worker-stop-1",
+      provider: "fly",
+      status: "stopped",
+      load: 0,
+    });
+    const control = await t.query(api.queue.getWorkerControlState as any, {
+      workerId: "worker-stop-1",
+    });
+    expect(control.shouldStop).toBe(true);
+
+    const controlUnknown = await t.query(api.queue.getWorkerControlState as any, {
+      workerId: "worker-nonexistent",
+    });
+    expect(controlUnknown.shouldStop).toBe(true);
+  });
+
+  test("scheduler caps desired workers by distinct ready conversations", async () => {
+    const t = initConvexTest();
+    await t.mutation(api.queue.upsertAgentProfile, {
+      agentKey: "support-agent",
+      version: "1.0.0",
+      soulMd: "# Soul",
+      clientMd: "# Client",
+      skills: ["agent-bridge"],
+      secretsRef: [],
+      enabled: true,
+    });
+    await t.mutation(api.queue.importPlaintextSecret, {
+      secretRef: "fly.apiToken",
+      plaintextValue: "fly-token",
+    });
+    await t.mutation(api.queue.importPlaintextSecret, {
+      secretRef: "convex.url",
+      plaintextValue: "https://example.convex.cloud",
+    });
+
+    await t.mutation(api.queue.enqueueMessage, {
+      conversationId: "telegram:chat:cap-1",
+      agentKey: "support-agent",
+      payload: {
+        provider: "telegram",
+        providerUserId: "u-cap",
+        messageText: "first",
+      },
+    });
+    await t.mutation(api.queue.enqueueMessage, {
+      conversationId: "telegram:chat:cap-1",
+      agentKey: "support-agent",
+      payload: {
+        provider: "telegram",
+        providerUserId: "u-cap",
+        messageText: "second",
+      },
+    });
+
+    await t.mutation(internal.queue.upsertWorkerState, {
+      workerId: "worker-cap-1",
       provider: "fly",
       status: "active",
       load: 0,
     });
-    const requested = await t.mutation(internal.queue.requestWorkerDrain as any, {
-      workerId: "worker-drain-1",
+    await t.mutation(internal.queue.upsertWorkerState, {
+      workerId: "worker-cap-2",
+      provider: "fly",
+      status: "active",
+      load: 0,
     });
-    expect(requested).toBe(true);
-    const control = await t.query(api.queue.getWorkerControlState as any, {
-      workerId: "worker-drain-1",
+    await t.mutation(internal.queue.upsertWorkerState, {
+      workerId: "worker-cap-3",
+      provider: "fly",
+      status: "active",
+      load: 0,
     });
-    expect(control.shouldDrain).toBe(true);
-    expect(control.snapshotRequired).toBe(true);
+
+    const reconcile = await t.action(api.scheduler.reconcileWorkerPool, {
+      scalingPolicy: {
+        minWorkers: 0,
+        maxWorkers: 5,
+        queuePerWorkerTarget: 1,
+        spawnStep: 1,
+        idleTimeoutMs: 300_000,
+        reconcileIntervalMs: 15_000,
+      },
+    });
+    expect(reconcile.desiredWorkers).toBe(1);
+  });
+
+  test("scheduler desired workers increases with distinct ready conversations", async () => {
+    const t = initConvexTest();
+    await t.mutation(api.queue.upsertAgentProfile, {
+      agentKey: "support-agent",
+      version: "1.0.0",
+      soulMd: "# Soul",
+      clientMd: "# Client",
+      skills: ["agent-bridge"],
+      secretsRef: [],
+      enabled: true,
+    });
+    await t.mutation(api.queue.importPlaintextSecret, {
+      secretRef: "fly.apiToken",
+      plaintextValue: "fly-token",
+    });
+    await t.mutation(api.queue.importPlaintextSecret, {
+      secretRef: "convex.url",
+      plaintextValue: "https://example.convex.cloud",
+    });
+
+    await t.mutation(api.queue.enqueueMessage, {
+      conversationId: "telegram:chat:cap-a",
+      agentKey: "support-agent",
+      payload: {
+        provider: "telegram",
+        providerUserId: "u-cap-a",
+        messageText: "hello",
+      },
+    });
+    await t.mutation(api.queue.enqueueMessage, {
+      conversationId: "telegram:chat:cap-b",
+      agentKey: "support-agent",
+      payload: {
+        provider: "telegram",
+        providerUserId: "u-cap-b",
+        messageText: "hello",
+      },
+    });
+
+    await t.mutation(internal.queue.upsertWorkerState, {
+      workerId: "worker-cap-4",
+      provider: "fly",
+      status: "active",
+      load: 0,
+    });
+    await t.mutation(internal.queue.upsertWorkerState, {
+      workerId: "worker-cap-5",
+      provider: "fly",
+      status: "active",
+      load: 0,
+    });
+    await t.mutation(internal.queue.upsertWorkerState, {
+      workerId: "worker-cap-6",
+      provider: "fly",
+      status: "active",
+      load: 0,
+    });
+
+    const reconcile = await t.action(api.scheduler.reconcileWorkerPool, {
+      scalingPolicy: {
+        minWorkers: 0,
+        maxWorkers: 5,
+        queuePerWorkerTarget: 1,
+        spawnStep: 1,
+        idleTimeoutMs: 300_000,
+        reconcileIntervalMs: 15_000,
+      },
+      providerConfig: {
+        kind: "fly",
+        appName: "agent-factory-workers",
+        organizationSlug: "personal",
+        image: "registry.fly.io/agent-factory-workers:test-image",
+        region: "iad",
+        volumeName: "",
+        volumePath: "",
+        volumeSizeGb: 10,
+      },
+    });
+    expect(reconcile.desiredWorkers).toBe(2);
   });
 });

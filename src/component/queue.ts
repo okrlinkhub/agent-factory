@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import { internal } from "./_generated/api.js";
 import {
   internalMutation,
   internalQuery,
@@ -88,7 +89,7 @@ export const enqueueMessage = mutation({
       Math.max(0, args.priority ?? DEFAULT_CONFIG.queue.defaultPriority),
     );
 
-    return await ctx.db.insert("messageQueue", {
+    const messageId = await ctx.db.insert("messageQueue", {
       conversationId: args.conversationId,
       agentKey: args.agentKey,
       payload: args.payload,
@@ -98,6 +99,18 @@ export const enqueueMessage = mutation({
       attempts: 0,
       maxAttempts: args.maxAttempts ?? DEFAULT_CONFIG.retry.maxAttempts,
     });
+    try {
+      await ctx.scheduler.runAfter(0, (internal.scheduler as any).reconcileWorkerPoolFromEnqueue, {
+        workspaceId: "default",
+      });
+    } catch (error) {
+      console.warn(
+        `[queue] failed to schedule reconcile after enqueue: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    return messageId;
   },
 });
 
@@ -395,10 +408,7 @@ export const claimNextJob = mutation({
           load: 1,
           heartbeatAt: nowMs,
           lastClaimAt: nowMs,
-          scheduledShutdownAt: computeScheduledShutdownAt(nowMs),
-          drainRequestedAt: undefined,
-          drainDeadlineAt: undefined,
-          drainSnapshotAckAt: undefined,
+          scheduledShutdownAt: undefined,
           capabilities: [],
         });
       } else {
@@ -407,10 +417,7 @@ export const claimNextJob = mutation({
           load: worker.load + 1,
           heartbeatAt: nowMs,
           lastClaimAt: nowMs,
-          scheduledShutdownAt: computeScheduledShutdownAt(nowMs),
-          drainRequestedAt: undefined,
-          drainDeadlineAt: undefined,
-          drainSnapshotAckAt: undefined,
+          scheduledShutdownAt: undefined,
         });
       }
 
@@ -533,12 +540,11 @@ export const completeJob = mutation({
       const nextLoad = Math.max(0, worker.load - 1);
       await ctx.db.patch(worker._id, {
         load: nextLoad,
-        status: nextLoad === 0 ? "idle" : "active",
         heartbeatAt: nowMs,
         scheduledShutdownAt:
           nextLoad === 0
-            ? computeScheduledShutdownAt(worker.lastClaimAt ?? nowMs)
-            : worker.scheduledShutdownAt,
+            ? nowMs + DEFAULT_CONFIG.scaling.idleTimeoutMs
+            : undefined,
       });
     }
     return true;
@@ -620,12 +626,11 @@ export const failJob = mutation({
       const nextLoad = Math.max(0, worker.load - 1);
       await ctx.db.patch(worker._id, {
         load: nextLoad,
-        status: nextLoad === 0 ? "idle" : "active",
         heartbeatAt: nowMs,
         scheduledShutdownAt:
           nextLoad === 0
-            ? computeScheduledShutdownAt(worker.lastClaimAt ?? nowMs)
-            : worker.scheduledShutdownAt,
+            ? nowMs + DEFAULT_CONFIG.scaling.idleTimeoutMs
+            : undefined,
       });
     }
 
@@ -1055,6 +1060,37 @@ export const hasQueuedJobsForConversation = query({
   },
 });
 
+export const getReadyConversationCountForScheduler = internalQuery({
+  args: {
+    nowMs: v.optional(v.number()),
+    limit: v.optional(v.number()),
+  },
+  returns: v.number(),
+  handler: async (ctx, args) => {
+    const nowMs = args.nowMs ?? Date.now();
+    const limit = Math.max(1, args.limit ?? 1000);
+    const queuedJobs = await ctx.db
+      .query("messageQueue")
+      .withIndex("by_status_and_scheduledFor", (q) =>
+        q.eq("status", "queued").lte("scheduledFor", nowMs),
+      )
+      .take(limit);
+    const conversationIds = [...new Set(queuedJobs.map((job) => job.conversationId))];
+    let readyConversations = 0;
+    for (const conversationId of conversationIds) {
+      const conversation = await ctx.db
+        .query("conversations")
+        .withIndex("by_conversationId", (q) => q.eq("conversationId", conversationId))
+        .unique();
+      const lock = conversation?.processingLock;
+      if (!lock || lock.leaseExpiresAt <= nowMs) {
+        readyConversations += 1;
+      }
+    }
+    return readyConversations;
+  },
+});
+
 export const listJobsByStatus = query({
   args: {
     status: queueStatusValidator,
@@ -1100,12 +1136,8 @@ export const upsertWorkerState = internalMutation({
     workerId: v.string(),
     provider: v.string(),
     status: v.union(
-      v.literal("starting"),
       v.literal("active"),
-      v.literal("idle"),
-      v.literal("draining"),
       v.literal("stopped"),
-      v.literal("failed"),
     ),
     load: v.number(),
     nowMs: v.optional(v.number()),
@@ -1160,65 +1192,20 @@ export const upsertWorkerState = internalMutation({
   },
 });
 
-export const requestWorkerDrain = internalMutation({
-  args: {
-    workerId: v.string(),
-    nowMs: v.optional(v.number()),
-    timeoutMs: v.optional(v.number()),
-  },
-  returns: v.boolean(),
-  handler: async (ctx, args) => {
-    const nowMs = args.nowMs ?? Date.now();
-    const timeoutMs = Math.max(10_000, args.timeoutMs ?? 60_000);
-    const worker = await ctx.db
-      .query("workers")
-      .withIndex("by_workerId", (q) => q.eq("workerId", args.workerId))
-      .unique();
-    if (!worker) return false;
-    await ctx.db.patch(worker._id, {
-      status: "draining",
-      drainRequestedAt: nowMs,
-      drainDeadlineAt: nowMs + timeoutMs,
-      drainSnapshotAckAt: undefined,
-    });
-    return true;
-  },
-});
-
 export const getWorkerControlState = query({
   args: {
     workerId: v.string(),
   },
   returns: v.object({
-    shouldDrain: v.boolean(),
-    snapshotRequired: v.boolean(),
-    drainRequestedAt: v.union(v.null(), v.number()),
-    drainDeadlineAt: v.union(v.null(), v.number()),
+    shouldStop: v.boolean(),
   }),
   handler: async (ctx, args) => {
     const worker = await ctx.db
       .query("workers")
       .withIndex("by_workerId", (q) => q.eq("workerId", args.workerId))
       .unique();
-    if (!worker) {
-      return {
-        shouldDrain: false,
-        snapshotRequired: false,
-        drainRequestedAt: null,
-        drainDeadlineAt: null,
-      };
-    }
-    const shouldDrain = worker.status === "draining";
-    const drainRequestedAt = worker.drainRequestedAt ?? null;
-    const snapshotRequired =
-      shouldDrain &&
-      drainRequestedAt !== null &&
-      (worker.drainSnapshotAckAt ?? 0) < drainRequestedAt;
     return {
-      shouldDrain,
-      snapshotRequired,
-      drainRequestedAt,
-      drainDeadlineAt: worker.drainDeadlineAt ?? null,
+      shouldStop: !worker || worker.status === "stopped",
     };
   },
 });
@@ -1283,7 +1270,6 @@ export const finalizeDataSnapshotUpload = mutation({
       .unique();
     if (worker) {
       await ctx.db.patch(worker._id, {
-        drainSnapshotAckAt: nowMs,
         lastSnapshotId: snapshot._id,
       });
     }
@@ -1367,20 +1353,13 @@ export const listWorkersForScheduler = internalQuery({
     v.object({
       workerId: v.string(),
       status: v.union(
-        v.literal("starting"),
         v.literal("active"),
-        v.literal("idle"),
-        v.literal("draining"),
         v.literal("stopped"),
-        v.literal("failed"),
       ),
       load: v.number(),
       heartbeatAt: v.number(),
       lastClaimAt: v.union(v.null(), v.number()),
       scheduledShutdownAt: v.union(v.null(), v.number()),
-      drainRequestedAt: v.union(v.null(), v.number()),
-      drainDeadlineAt: v.union(v.null(), v.number()),
-      drainSnapshotAckAt: v.union(v.null(), v.number()),
       machineId: v.union(v.null(), v.string()),
       appName: v.union(v.null(), v.string()),
       region: v.union(v.null(), v.string()),
@@ -1395,9 +1374,6 @@ export const listWorkersForScheduler = internalQuery({
       heartbeatAt: worker.heartbeatAt,
       lastClaimAt: worker.lastClaimAt ?? null,
       scheduledShutdownAt: worker.scheduledShutdownAt ?? null,
-      drainRequestedAt: worker.drainRequestedAt ?? null,
-      drainDeadlineAt: worker.drainDeadlineAt ?? null,
-      drainSnapshotAckAt: worker.drainSnapshotAckAt ?? null,
       machineId: worker.machineRef?.machineId ?? null,
       appName: worker.machineRef?.appName ?? null,
       region: worker.machineRef?.region ?? null,
@@ -1436,12 +1412,8 @@ export const getWorkerStats = query({
       v.object({
         workerId: v.string(),
         status: v.union(
-          v.literal("starting"),
           v.literal("active"),
-          v.literal("idle"),
-          v.literal("draining"),
           v.literal("stopped"),
-          v.literal("failed"),
         ),
         load: v.number(),
         heartbeatAt: v.number(),
@@ -1451,28 +1423,18 @@ export const getWorkerStats = query({
     ),
   }),
   handler: async (ctx) => {
-    const workers = await ctx.db
+    const activeWorkers = await ctx.db
       .query("workers")
       .withIndex("by_status", (q) => q.eq("status", "active"))
       .collect();
-    const idleWorkers = await ctx.db
-      .query("workers")
-      .withIndex("by_status", (q) => q.eq("status", "idle"))
-      .collect();
-    const startingWorkers = await ctx.db
-      .query("workers")
-      .withIndex("by_status", (q) => q.eq("status", "starting"))
-      .collect();
-    const drainingWorkers = await ctx.db
-      .query("workers")
-      .withIndex("by_status", (q) => q.eq("status", "draining"))
-      .collect();
 
-    const merged = [...workers, ...idleWorkers, ...startingWorkers, ...drainingWorkers];
+    const withLoad = activeWorkers.filter((w) => w.load > 0);
+    const idle = activeWorkers.filter((w) => w.load === 0);
+
     return {
-      activeCount: workers.length + startingWorkers.length + drainingWorkers.length,
-      idleCount: idleWorkers.length,
-      workers: merged.map((worker) => ({
+      activeCount: withLoad.length,
+      idleCount: idle.length,
+      workers: activeWorkers.map((worker) => ({
         workerId: worker.workerId,
         status: worker.status,
         load: worker.load,
@@ -1535,10 +1497,6 @@ function estimateTokens(
     0,
   );
   return Math.ceil((sectionChars + memoryChars) / 4);
-}
-
-function computeScheduledShutdownAt(lastClaimAt: number): number {
-  return lastClaimAt + DEFAULT_CONFIG.scaling.idleTimeoutMs;
 }
 
 function fingerprintConversationDelta(

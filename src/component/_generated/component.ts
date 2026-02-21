@@ -473,7 +473,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             volumeSizeGb: number;
           };
           scalingPolicy?: {
-            drainStep: number;
             idleTimeoutMs: number;
             maxWorkers: number;
             minWorkers: number;
@@ -535,13 +534,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             heartbeatAt: number;
             load: number;
             machineId: null | string;
-            status:
-              | "starting"
-              | "active"
-              | "idle"
-              | "draining"
-              | "stopped"
-              | "failed";
+            status: "active" | "stopped";
             workerId: string;
           }>;
         },
@@ -767,12 +760,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "query",
         "internal",
         { workerId: string },
-        {
-          drainDeadlineAt: null | number;
-          drainRequestedAt: null | number;
-          shouldDrain: boolean;
-          snapshotRequired: boolean;
-        },
+        { shouldStop: boolean },
         Name
       >;
       getWorkerStats: FunctionReference<
@@ -787,13 +775,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             heartbeatAt: number;
             load: number;
             machineId: null | string;
-            status:
-              | "starting"
-              | "active"
-              | "idle"
-              | "draining"
-              | "stopped"
-              | "failed";
+            status: "active" | "stopped";
             workerId: string;
           }>;
         },
@@ -899,7 +881,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             volumeSizeGb: number;
           };
           scalingPolicy?: {
-            drainStep: number;
             idleTimeoutMs: number;
             maxWorkers: number;
             minWorkers: number;

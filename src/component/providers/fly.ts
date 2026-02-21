@@ -1,10 +1,6 @@
 export type WorkerProviderStatus =
-  | "starting"
   | "active"
-  | "idle"
-  | "draining"
-  | "stopped"
-  | "failed";
+  | "stopped";
 
 export type SpawnWorkerInput = {
   workerId: string;
@@ -193,17 +189,14 @@ export class FlyMachinesProvider implements WorkerProvider {
 function mapFlyStateToProviderStatus(state: string | undefined): WorkerProviderStatus {
   switch (state) {
     case "created":
-      return "starting";
     case "started":
       return "active";
     case "stopped":
-      return "stopped";
     case "destroyed":
-      return "stopped";
     case "suspended":
-      return "idle";
+      return "stopped";
     default:
-      return "failed";
+      return "stopped";
   }
 }
 
