@@ -193,7 +193,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       claim: FunctionReference<
         "mutation",
         "internal",
-        { conversationId?: string; nowMs?: number; workerId: string },
+        { nowMs?: number; workerId: string },
         null | {
           agentKey: string;
           conversationId: string;
@@ -540,7 +540,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       claimNextJob: FunctionReference<
         "mutation",
         "internal",
-        { conversationId?: string; nowMs?: number; workerId: string },
+        { nowMs?: number; workerId: string },
         null | {
           agentKey: string;
           conversationId: string;
@@ -691,13 +691,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             workerId: string;
           }>;
         },
-        Name
-      >;
-      hasQueuedJobsForConversation: FunctionReference<
-        "query",
-        "internal",
-        { conversationId: string; nowMs?: number },
-        boolean,
         Name
       >;
       heartbeatJob: FunctionReference<
