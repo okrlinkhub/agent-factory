@@ -266,7 +266,6 @@ export const getActiveSecretPlaintext = internalQuery({
 export const claimNextJob = mutation({
   args: {
     workerId: v.string(),
-    conversationId: v.optional(v.string()),
     nowMs: v.optional(v.number()),
   },
   returns: v.union(v.null(), claimedJobValidator),
@@ -278,18 +277,14 @@ export const claimNextJob = mutation({
         q.eq("status", "queued").lte("scheduledFor", nowMs),
       )
       .take(DEFAULT_CONFIG.queue.claimBatchSize);
-    const stickyConversationId = args.conversationId;
-    const filteredCandidates = stickyConversationId
-      ? candidates.filter((candidate) => candidate.conversationId === stickyConversationId)
-      : candidates;
 
-    filteredCandidates.sort((a, b) => {
+    candidates.sort((a, b) => {
       if (a.priority !== b.priority) return b.priority - a.priority;
       if (a.scheduledFor !== b.scheduledFor) return a.scheduledFor - b.scheduledFor;
       return a._creationTime - b._creationTime;
     });
 
-    for (const candidate of filteredCandidates) {
+    for (const candidate of candidates) {
       const conversation = await ctx.db
         .query("conversations")
         .withIndex("by_conversationId", (q) =>
@@ -355,24 +350,6 @@ export const claimNextJob = mutation({
       };
     }
     return null;
-  },
-});
-
-export const hasQueuedJobsForConversation = query({
-  args: {
-    conversationId: v.string(),
-    nowMs: v.optional(v.number()),
-  },
-  returns: v.boolean(),
-  handler: async (ctx, args) => {
-    const nowMs = args.nowMs ?? Date.now();
-    const queued = await ctx.db
-      .query("messageQueue")
-      .withIndex("by_status_and_scheduledFor", (q) =>
-        q.eq("status", "queued").lte("scheduledFor", nowMs),
-      )
-      .take(DEFAULT_CONFIG.queue.claimBatchSize * 2);
-    return queued.some((job) => job.conversationId === args.conversationId);
   },
 });
 
