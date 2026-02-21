@@ -225,11 +225,30 @@ export const reconcileWorkerPool = action({
       )
       .sort((a, b) => (a.scheduledShutdownAt ?? 0) - (b.scheduledShutdownAt ?? 0));
     for (const worker of dueIdleTimeout) {
-      await ctx.runMutation((internal.queue as any).requestWorkerDrain, {
+      const machineId = worker.machineId;
+      const machineIsLive = machineId ? liveMachineIds.has(machineId) : false;
+      if (machineId && machineIsLive) {
+        try {
+          await provider.cordonWorker(providerConfig.appName, machineId);
+          await provider.terminateWorker(providerConfig.appName, machineId);
+        } catch (error) {
+          if (!isSafeMissingMachineError(error)) {
+            throw error;
+          }
+        }
+      }
+      await ctx.runMutation(internal.queue.upsertWorkerState, {
         workerId: worker.workerId,
+        provider: providerConfig.kind,
+        status: "stopped",
+        load: 0,
         nowMs,
-        timeoutMs: 60_000,
+        scheduledShutdownAt: nowMs,
+        machineId: machineId ?? undefined,
+        appName: providerConfig.appName,
+        region: providerConfig.region,
       });
+      terminated += 1;
     }
 
     if (desiredWorkers < activeWorkers) {
