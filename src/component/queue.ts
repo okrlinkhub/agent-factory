@@ -821,16 +821,18 @@ export const getHydrationBundleForClaimedJob = query({
       .withIndex("by_snapshotKey", (q) => q.eq("snapshotKey", snapshotKey))
       .first();
 
+    const telegramSecretRef = profile.secretsRef.find(
+      (ref) => ref === "telegram.botToken" || ref.startsWith("telegram.botToken."),
+    );
     let telegramBotToken: string | null = null;
-    for (const secretRef of profile.secretsRef) {
+    if (telegramSecretRef) {
       const activeSecret = await ctx.db
         .query("secrets")
         .withIndex("by_secretRef_and_active", (q) =>
-          q.eq("secretRef", secretRef).eq("active", true),
+          q.eq("secretRef", telegramSecretRef).eq("active", true),
         )
         .unique();
-      if (!activeSecret) continue;
-      if (secretRef === "telegram.botToken" || secretRef.startsWith("telegram.botToken.")) {
+      if (activeSecret) {
         telegramBotToken = decryptSecretValue(activeSecret.encryptedValue, activeSecret.algorithm);
       }
     }
