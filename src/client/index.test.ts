@@ -30,7 +30,6 @@ describe("client tests", () => {
       soulMd: "# Soul",
       clientMd: "# Client",
       skills: [],
-      runtimeConfig: { model: "gpt-5" },
       secretsRef: [],
       enabled: true,
     });

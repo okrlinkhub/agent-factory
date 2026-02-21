@@ -56,27 +56,29 @@ export const reconcileWorkerPool = action({
       processing: number;
       deadLetter: number;
     } = await ctx.runQuery(api.queue.getQueueStats, { nowMs });
-    let workerStats: {
-      activeCount: number;
-      idleCount: number;
-      workers: Array<{
-        workerId: string;
-        status: "starting" | "active" | "idle" | "draining" | "stopped" | "failed";
-        load: number;
-        heartbeatAt: number;
-        machineId: string | null;
-        appName: string | null;
-      }>;
-    } = await ctx.runQuery(api.queue.getWorkerStats, {});
+    let workerRows: Array<{
+      workerId: string;
+      status: "starting" | "active" | "idle" | "draining" | "stopped" | "failed";
+      load: number;
+      heartbeatAt: number;
+      lastClaimAt: number | null;
+      scheduledShutdownAt: number | null;
+      drainRequestedAt: number | null;
+      drainDeadlineAt: number | null;
+      drainSnapshotAckAt: number | null;
+      machineId: string | null;
+      appName: string | null;
+      region: string | null;
+    }> = await ctx.runQuery((internal.queue as any).listWorkersForScheduler, {});
 
-    const localWorkersWithMachine = workerStats.workers.filter(
+    const localWorkersWithMachine = workerRows.filter(
       (worker) =>
         worker.machineId &&
         (worker.appName === null || worker.appName === providerConfig.appName),
     );
     const liveMachineIds = new Set<string>();
     const liveMachineImages = new Set<string>();
-    let staleWorkers: Array<(typeof workerStats.workers)[number]> = [];
+    let staleWorkers: Array<(typeof workerRows)[number]> = [];
     if (localWorkersWithMachine.length > 0) {
       const providerWorkers = await provider.listWorkers(providerConfig.appName);
       for (const worker of providerWorkers) {
@@ -114,9 +116,44 @@ export const reconcileWorkerPool = action({
         });
       }
       if (staleWorkers.length > 0) {
-        workerStats = await ctx.runQuery(api.queue.getWorkerStats, {});
+        workerRows = await ctx.runQuery((internal.queue as any).listWorkersForScheduler, {});
       }
     }
+
+    let spawned = 0;
+    let terminated = staleWorkers.length;
+
+    for (const worker of workerRows.filter((row) => row.status === "draining")) {
+      const machineId = worker.machineId;
+      const machineIsLive = machineId ? liveMachineIds.has(machineId) : false;
+      const snapshotAcked =
+        worker.drainRequestedAt !== null &&
+        (worker.drainSnapshotAckAt ?? 0) >= worker.drainRequestedAt;
+      if (!snapshotAcked) continue;
+      if (machineId && machineIsLive) {
+        try {
+          await provider.cordonWorker(providerConfig.appName, machineId);
+          await provider.terminateWorker(providerConfig.appName, machineId);
+        } catch (error) {
+          if (!isSafeMissingMachineError(error)) {
+            throw error;
+          }
+        }
+      }
+      await ctx.runMutation(internal.queue.upsertWorkerState, {
+        workerId: worker.workerId,
+        provider: providerConfig.kind,
+        status: "stopped",
+        load: 0,
+        nowMs,
+        scheduledShutdownAt: nowMs,
+        machineId: machineId ?? undefined,
+        appName: providerConfig.appName,
+        region: providerConfig.region,
+      });
+      terminated += 1;
+    }
+    workerRows = await ctx.runQuery((internal.queue as any).listWorkersForScheduler, {});
 
     const computedDesired = Math.ceil(
       queueStats.queuedReady / Math.max(1, scaling.queuePerWorkerTarget),
@@ -136,10 +173,13 @@ export const reconcileWorkerPool = action({
         `[scheduler] dedicated volume mode enabled for ${providerConfig.volumeName}; clamping desired workers to 1`,
       );
     }
-    const activeWorkers = workerStats.activeCount;
-
-    let spawned = 0;
-    let terminated = staleWorkers.length;
+    const activeWorkers = workerRows.filter(
+      (worker) =>
+        worker.status === "starting" ||
+        worker.status === "active" ||
+        worker.status === "idle" ||
+        worker.status === "draining",
+    ).length;
 
     if (desiredWorkers > activeWorkers) {
       const toSpawn = Math.min(scaling.spawnStep, desiredWorkers - activeWorkers);
@@ -158,6 +198,7 @@ export const reconcileWorkerPool = action({
             CONVEX_URL: convexUrl,
             WORKSPACE_ID: workspaceId,
             WORKER_ID: workerId,
+            WORKER_IDLE_TIMEOUT_MS: String(scaling.idleTimeoutMs),
           },
         });
         await ctx.runMutation(internal.queue.upsertWorkerState, {
@@ -172,40 +213,45 @@ export const reconcileWorkerPool = action({
         });
         spawned += 1;
       }
-    } else if (desiredWorkers < activeWorkers) {
+    }
+
+    const dueIdleTimeout = workerRows
+      .filter(
+        (worker) =>
+          (worker.status === "active" || worker.status === "idle") &&
+          worker.load === 0 &&
+          worker.scheduledShutdownAt !== null &&
+          worker.scheduledShutdownAt <= nowMs,
+      )
+      .sort((a, b) => (a.scheduledShutdownAt ?? 0) - (b.scheduledShutdownAt ?? 0));
+    for (const worker of dueIdleTimeout) {
+      await ctx.runMutation((internal.queue as any).requestWorkerDrain, {
+        workerId: worker.workerId,
+        nowMs,
+        timeoutMs: 60_000,
+      });
+    }
+
+    if (desiredWorkers < activeWorkers) {
       const toDrain = Math.min(scaling.drainStep, activeWorkers - desiredWorkers);
-      const idleFirst = workerStats.workers
+      const idleFirst = workerRows
         .filter((worker) => worker.status === "idle" || worker.load === 0)
         .sort((a, b) => a.heartbeatAt - b.heartbeatAt)
         .slice(0, toDrain);
 
       for (const worker of idleFirst) {
-        const machineId = worker.machineId;
-        const machineIsLive = machineId ? liveMachineIds.has(machineId) : false;
-        if (machineId && machineIsLive) {
-          try {
-            await provider.cordonWorker(providerConfig.appName, machineId);
-            await provider.terminateWorker(providerConfig.appName, machineId);
-          } catch (error) {
-            if (!isSafeMissingMachineError(error)) {
-              throw error;
-            }
-          }
-        }
-        await ctx.runMutation(internal.queue.upsertWorkerState, {
+        await ctx.runMutation((internal.queue as any).requestWorkerDrain, {
           workerId: worker.workerId,
-          provider: providerConfig.kind,
-          status: "stopped",
-          load: 0,
           nowMs,
-          scheduledShutdownAt: nowMs,
-          machineId: machineId ?? undefined,
-          appName: providerConfig.appName,
-          region: providerConfig.region,
+          timeoutMs: 60_000,
         });
-        terminated += 1;
       }
     }
+
+    await ctx.runMutation((internal.queue as any).expireOldDataSnapshots, {
+      nowMs,
+      limit: 100,
+    });
 
     return {
       desiredWorkers,

@@ -161,8 +161,16 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             role: "system" | "user" | "assistant" | "tool";
           }>;
           nowMs?: number;
+          workspaceId?: string;
         },
         { messageCount: number; updated: boolean },
+        Name
+      >;
+      attachMessageMetadata: FunctionReference<
+        "mutation",
+        "internal",
+        { messageId: string; metadata: Record<string, string> },
+        boolean,
         Name
       >;
       bindUserAgent: FunctionReference<
@@ -230,7 +238,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           agentKey: string;
           clientMd?: string;
           enabled: boolean;
-          runtimeConfig: Record<string, string | number | boolean>;
           secretsRef: Array<string>;
           skills: Array<string>;
           soulMd: string;
@@ -322,6 +329,13 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         },
         Name
       >;
+      generateMediaUploadUrl: FunctionReference<
+        "mutation",
+        "internal",
+        {},
+        { uploadUrl: string },
+        Name
+      >;
       getHydrationBundle: FunctionReference<
         "query",
         "internal",
@@ -350,11 +364,19 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             providerUserId: string;
             rawUpdateJson?: string;
           };
-          runtimeConfig: Record<string, string | number | boolean>;
           snapshot: null | {
             compiledPromptStack: Array<{ content: string; section: string }>;
             memoryWindow: Array<{ excerpt: string; path: string }>;
-            skillsBundle: Array<{ manifestMd: string; skillKey: string }>;
+            skillsBundle: Array<{
+              assets?: Array<{
+                assetPath: string;
+                assetType: "script" | "config" | "venv" | "other";
+                contentHash: string;
+                sizeBytes: number;
+              }>;
+              manifestMd: string;
+              skillKey: string;
+            }>;
             snapshotId: string;
             snapshotKey: string;
           };
@@ -377,6 +399,13 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           telegramUserId: null | string;
           usedAt: null | number;
         },
+        Name
+      >;
+      getStorageFileUrl: FunctionReference<
+        "query",
+        "internal",
+        { storageId: string },
+        null | string,
         Name
       >;
       getUserAgentBinding: FunctionReference<
@@ -531,8 +560,16 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             role: "system" | "user" | "assistant" | "tool";
           }>;
           nowMs?: number;
+          workspaceId?: string;
         },
         { messageCount: number; updated: boolean },
+        Name
+      >;
+      attachMessageMetadata: FunctionReference<
+        "mutation",
+        "internal",
+        { messageId: string; metadata: Record<string, string> },
+        boolean,
         Name
       >;
       claimNextJob: FunctionReference<
@@ -590,6 +627,13 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         string,
         Name
       >;
+      failDataSnapshotUpload: FunctionReference<
+        "mutation",
+        "internal",
+        { error: string; nowMs?: number; snapshotId: string; workerId: string },
+        boolean,
+        Name
+      >;
       failJob: FunctionReference<
         "mutation",
         "internal",
@@ -605,6 +649,27 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           nextScheduledFor: null | number;
           requeued: boolean;
         },
+        Name
+      >;
+      finalizeDataSnapshotUpload: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          nowMs?: number;
+          sha256: string;
+          sizeBytes: number;
+          snapshotId: string;
+          storageId: string;
+          workerId: string;
+        },
+        boolean,
+        Name
+      >;
+      generateMediaUploadUrl: FunctionReference<
+        "mutation",
+        "internal",
+        {},
+        { uploadUrl: string },
         Name
       >;
       getHydrationBundleForClaimedJob: FunctionReference<
@@ -635,15 +700,41 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             providerUserId: string;
             rawUpdateJson?: string;
           };
-          runtimeConfig: Record<string, string | number | boolean>;
           snapshot: null | {
             compiledPromptStack: Array<{ content: string; section: string }>;
             memoryWindow: Array<{ excerpt: string; path: string }>;
-            skillsBundle: Array<{ manifestMd: string; skillKey: string }>;
+            skillsBundle: Array<{
+              assets?: Array<{
+                assetPath: string;
+                assetType: "script" | "config" | "venv" | "other";
+                contentHash: string;
+                sizeBytes: number;
+              }>;
+              manifestMd: string;
+              skillKey: string;
+            }>;
             snapshotId: string;
             snapshotKey: string;
           };
           telegramBotToken: null | string;
+        },
+        Name
+      >;
+      getLatestDataSnapshotForRestore: FunctionReference<
+        "query",
+        "internal",
+        {
+          agentKey: string;
+          conversationId?: string;
+          nowMs?: number;
+          workspaceId: string;
+        },
+        null | {
+          createdAt: number;
+          downloadUrl: string;
+          sha256: null | string;
+          sizeBytes: null | number;
+          snapshotId: string;
         },
         Name
       >;
@@ -663,6 +754,25 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           secretRef: string;
           version: null | number;
         }>,
+        Name
+      >;
+      getStorageFileUrl: FunctionReference<
+        "query",
+        "internal",
+        { storageId: string },
+        null | string,
+        Name
+      >;
+      getWorkerControlState: FunctionReference<
+        "query",
+        "internal",
+        { workerId: string },
+        {
+          drainDeadlineAt: null | number;
+          drainRequestedAt: null | number;
+          shouldDrain: boolean;
+          snapshotRequired: boolean;
+        },
         Name
       >;
       getWorkerStats: FunctionReference<
@@ -740,6 +850,20 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         }>,
         Name
       >;
+      prepareDataSnapshotUpload: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          agentKey: string;
+          conversationId?: string;
+          nowMs?: number;
+          reason: "drain" | "signal" | "manual";
+          workerId: string;
+          workspaceId: string;
+        },
+        { expiresAt: number; snapshotId: string; uploadUrl: string },
+        Name
+      >;
       upsertAgentProfile: FunctionReference<
         "mutation",
         "internal",
@@ -747,7 +871,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           agentKey: string;
           clientMd?: string;
           enabled: boolean;
-          runtimeConfig: Record<string, string | number | boolean>;
           secretsRef: Array<string>;
           skills: Array<string>;
           soulMd: string;

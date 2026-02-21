@@ -61,7 +61,7 @@ export type AgentFactoryConfig = {
 };
 
 export const DEFAULT_WORKER_IMAGE =
-  "registry.fly.io/agent-factory-workers:deployment-01KHZ7REDTXSPC3YF3X46D9QJE";
+  "registry.fly.io/agent-factory-workers:deployment-01KHZM3XXQW1YG8DA1V3KEW6WV";
 export const DEFAULT_WORKER_VOLUME_NAME = "openclaw_data";
 export const DEFAULT_WORKER_VOLUME_PATH = "/data";
 export const DEFAULT_WORKER_RUNTIME_ENV: Record<string, string> = {
@@ -166,7 +166,7 @@ export const DEFAULT_CONFIG: AgentFactoryConfig = {
     queuePerWorkerTarget: 5,
     spawnStep: 1,
     drainStep: 1,
-    idleTimeoutMs: 120_000,
+    idleTimeoutMs: 300_000,
     reconcileIntervalMs: 15_000,
   },
   hydration: {

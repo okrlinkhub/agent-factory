@@ -139,6 +139,7 @@ export function exposeApi(
     workerAppendConversationMessages: mutationGeneric({
       args: {
         conversationId: v.string(),
+        workspaceId: v.optional(v.string()),
         messages: v.array(
           v.object({
             role: v.union(
@@ -157,6 +158,89 @@ export function exposeApi(
         return await ctx.runMutation(component.lib.appendConversationMessages, args);
       },
     }),
+    workerControlState: queryGeneric({
+      args: {
+        workerId: v.string(),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runQuery((component.queue as any).getWorkerControlState, args);
+      },
+    }),
+    workerPrepareSnapshotUpload: mutationGeneric({
+      args: {
+        workerId: v.string(),
+        workspaceId: v.string(),
+        agentKey: v.string(),
+        conversationId: v.optional(v.string()),
+        reason: v.union(v.literal("drain"), v.literal("signal"), v.literal("manual")),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "write" });
+        return await ctx.runMutation((component.queue as any).prepareDataSnapshotUpload, args);
+      },
+    }),
+    workerFinalizeSnapshotUpload: mutationGeneric({
+      args: {
+        workerId: v.string(),
+        snapshotId: v.string(),
+        storageId: v.string(),
+        sha256: v.string(),
+        sizeBytes: v.number(),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "write" });
+        return await ctx.runMutation((component.queue as any).finalizeDataSnapshotUpload, args);
+      },
+    }),
+    workerFailSnapshotUpload: mutationGeneric({
+      args: {
+        workerId: v.string(),
+        snapshotId: v.string(),
+        error: v.string(),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "write" });
+        return await ctx.runMutation((component.queue as any).failDataSnapshotUpload, args);
+      },
+    }),
+    workerLatestSnapshotForRestore: queryGeneric({
+      args: {
+        workspaceId: v.string(),
+        agentKey: v.string(),
+        conversationId: v.optional(v.string()),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runQuery((component.queue as any).getLatestDataSnapshotForRestore, args);
+      },
+    }),
+    workerGenerateMediaUploadUrl: mutationGeneric({
+      args: {},
+      handler: async (ctx) => {
+        await options.auth(ctx, { type: "write" });
+        return await ctx.runMutation((component.queue as any).generateMediaUploadUrl, {});
+      },
+    }),
+    workerGetStorageFileUrl: queryGeneric({
+      args: {
+        storageId: v.string(),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runQuery((component.queue as any).getStorageFileUrl, args);
+      },
+    }),
+    workerAttachMessageMetadata: mutationGeneric({
+      args: {
+        messageId: v.string(),
+        metadata: v.record(v.string(), v.string()),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "write" });
+        return await ctx.runMutation((component.queue as any).attachMessageMetadata, args);
+      },
+    }),
     seedDefaultAgent: mutationGeneric({
       args: {},
       handler: async (ctx) => {
@@ -167,7 +251,6 @@ export function exposeApi(
           soulMd: "# Soul",
           clientMd: "# Client",
           skills: ["agent-bridge"],
-          runtimeConfig: { model: "gpt-5" },
           secretsRef: ["telegram.botToken"],
           enabled: true,
         });
@@ -331,24 +414,35 @@ export function registerRoutes(
         update_id?: number;
         message?: {
           text?: string;
+          caption?: string;
           message_id?: number;
+          photo?: Array<{ file_id?: string }>;
+          video?: { file_id?: string; duration?: number };
+          audio?: { file_id?: string; duration?: number };
+          voice?: { file_id?: string; duration?: number };
           chat?: { id?: number | string };
           from?: { id?: number | string };
         };
       };
 
       const message = update.message;
-      if (!message?.chat?.id || !message?.from?.id || !message.text) {
-        return new Response(JSON.stringify({ ok: false, error: "invalid payload" }), {
-          status: 400,
+      if (!message?.chat?.id || !message?.from?.id) {
+        return new Response(JSON.stringify({ ok: true, ignored: true }), {
+          status: 200,
           headers: { "Content-Type": "application/json" },
         });
       }
 
       const telegramUserId = String(message.from.id);
       const telegramChatId = String(message.chat.id);
-      const startCommandCode = parseStartCommandCode(message.text);
-      const isStartCommand = message.text.trimStart().startsWith("/start");
+      const text = typeof message.text === "string" ? message.text.trim() : "";
+      const caption = typeof message.caption === "string" ? message.caption.trim() : "";
+      const hasPhoto = Array.isArray(message.photo) && message.photo.length > 0;
+      const hasVideo = !!message.video;
+      const hasAudio = !!message.audio || !!message.voice;
+
+      const startCommandCode = text ? parseStartCommandCode(text) : null;
+      const isStartCommand = text.trimStart().startsWith("/start");
       if (startCommandCode) {
         try {
           const pairing = await ctx.runMutation(component.lib.consumePairingCode, {
@@ -419,15 +513,63 @@ export function registerRoutes(
           },
         );
       }
+      const messageText =
+        text ||
+        caption ||
+        (hasPhoto && hasVideo && hasAudio
+          ? "[telegram media] photo + video + audio message"
+          : hasPhoto && hasVideo
+            ? "[telegram media] photo + video message"
+            : hasPhoto && hasAudio
+              ? "[telegram media] photo + audio message"
+              : hasVideo && hasAudio
+                ? "[telegram media] video + audio message"
+                : hasPhoto
+            ? "[telegram media] photo message"
+            : hasVideo
+              ? "[telegram media] video message"
+            : hasAudio
+              ? "[telegram media] audio message"
+              : "");
+      if (!messageText) {
+        return new Response(JSON.stringify({ ok: true, ignored: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      const metadata: Record<string, string> = {
+        telegramChatId,
+        telegramUserId,
+      };
+      if (hasPhoto) {
+        metadata.telegramMediaType = "photo";
+        const largestPhoto = message.photo?.[message.photo.length - 1];
+        if (largestPhoto?.file_id) {
+          metadata.telegramPhotoFileId = largestPhoto.file_id;
+        }
+      }
+      if (message.audio?.file_id) {
+        metadata.telegramMediaType = hasPhoto ? "photo+audio" : hasVideo ? "video+audio" : "audio";
+        metadata.telegramAudioFileId = message.audio.file_id;
+      }
+      if (message.voice?.file_id) {
+        metadata.telegramMediaType = hasPhoto ? "photo+voice" : hasVideo ? "video+voice" : "voice";
+        metadata.telegramVoiceFileId = message.voice.file_id;
+      }
+      if (message.video?.file_id) {
+        metadata.telegramMediaType = hasPhoto ? "photo+video" : "video";
+        metadata.telegramVideoFileId = message.video.file_id;
+      }
       await ctx.runMutation(component.lib.enqueue, {
         conversationId: `telegram:${telegramChatId}`,
         agentKey,
         payload: {
           provider: "telegram",
           providerUserId: telegramUserId,
-          messageText: message.text,
+          messageText,
           externalMessageId: String(message.message_id ?? update.update_id ?? ""),
           rawUpdateJson: JSON.stringify(update),
+          metadata,
         },
       });
       return new Response(JSON.stringify({ ok: true }), {

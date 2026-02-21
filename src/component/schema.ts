@@ -8,10 +8,6 @@ export default defineSchema({
     soulMd: v.string(),
     clientMd: v.optional(v.string()),
     skills: v.array(v.string()),
-    runtimeConfig: v.record(
-      v.string(),
-      v.union(v.string(), v.number(), v.boolean()),
-    ),
     secretsRef: v.array(v.string()),
     enabled: v.boolean(),
   })
@@ -120,12 +116,42 @@ export default defineSchema({
     heartbeatAt: v.number(),
     lastClaimAt: v.optional(v.number()),
     scheduledShutdownAt: v.optional(v.number()),
+    drainRequestedAt: v.optional(v.number()),
+    drainDeadlineAt: v.optional(v.number()),
+    drainSnapshotAckAt: v.optional(v.number()),
+    lastSnapshotId: v.optional(v.id("dataSnapshots")),
     capabilities: v.array(v.string()),
   })
     .index("by_workerId", ["workerId"])
     .index("by_status", ["status"])
     .index("by_heartbeatAt", ["heartbeatAt"])
     .index("by_scheduledShutdownAt", ["scheduledShutdownAt"]),
+
+  dataSnapshots: defineTable({
+    workspaceId: v.string(),
+    agentKey: v.string(),
+    workerId: v.string(),
+    conversationId: v.optional(v.string()),
+    reason: v.union(v.literal("drain"), v.literal("signal"), v.literal("manual")),
+    formatVersion: v.number(),
+    archiveFileId: v.optional(v.id("_storage")),
+    sha256: v.optional(v.string()),
+    sizeBytes: v.optional(v.number()),
+    status: v.union(
+      v.literal("uploading"),
+      v.literal("ready"),
+      v.literal("failed"),
+      v.literal("expired"),
+    ),
+    error: v.optional(v.string()),
+    createdAt: v.number(),
+    completedAt: v.optional(v.number()),
+    expiresAt: v.number(),
+  })
+    .index("by_workerId_and_createdAt", ["workerId", "createdAt"])
+    .index("by_workspaceId_and_agentKey_and_createdAt", ["workspaceId", "agentKey", "createdAt"])
+    .index("by_conversationId_and_createdAt", ["conversationId", "createdAt"])
+    .index("by_status_and_expiresAt", ["status", "expiresAt"]),
 
   secrets: defineTable({
     secretRef: v.string(),
@@ -255,6 +281,21 @@ export default defineSchema({
       v.object({
         skillKey: v.string(),
         manifestMd: v.string(),
+        assets: v.optional(
+          v.array(
+            v.object({
+              assetPath: v.string(),
+              assetType: v.union(
+                v.literal("script"),
+                v.literal("config"),
+                v.literal("venv"),
+                v.literal("other"),
+              ),
+              contentHash: v.string(),
+              sizeBytes: v.number(),
+            }),
+          ),
+        ),
       }),
     ),
     memoryWindow: v.array(
@@ -292,6 +333,7 @@ export default defineSchema({
           v.literal("tool"),
         ),
         content: v.string(),
+        at: v.number(),
       }),
     ),
     deltaFingerprint: v.string(),

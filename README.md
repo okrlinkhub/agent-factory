@@ -53,6 +53,21 @@ In this project setup, the queue processor runtime is **Fly worker-only** (not t
 The consumer app receives ingress and enqueues, while Fly workers dequeue and execute jobs.
 The worker should consume tenant-specific tokens from the hydration payload (resolved by the component), not from global Fly env vars.
 
+### LLM configuration (Fly env)
+
+LLM selection is intentionally **not stored in `agentProfiles`** anymore.
+The model/provider is controlled by Fly worker environment variables (for example `OPENCLAW_AGENT_MODEL`, `MOONSHOT_API_KEY`, `OPENAI_API_KEY`) and applied at runtime by the worker image bootstrap.
+
+Why:
+- keeps model routing as infrastructure/runtime concern
+- avoids per-agent schema coupling to a specific LLM field
+- lets you switch model/provider with a Fly deploy or env change only
+
+Practical notes:
+- set model/provider env on the Fly app (`fly secrets set` / `[env]` in `fly.toml`)
+- keep `agentProfiles` focused on identity, skills, docs, and secrets references
+- worker image tag stays centralized in `src/component/config.ts` (`DEFAULT_WORKER_IMAGE`)
+
 If you use `exposeApi(...)`, the worker contract is available directly on the consumer API surface:
 - `workerClaim`
 - `workerHydrationBundle`
@@ -155,6 +170,16 @@ Hydration-optimized tables:
 - `skillAssets`
 - `hydrationSnapshots`
 - `conversationHydrationCache`
+- `dataSnapshots`
+
+## Recent updates
+
+- `idleTimeoutMs` aligned to 5 minutes and `workers.scheduledShutdownAt` now tracks idle lifecycle from `lastClaimAt`.
+- Pre-stop drain protocol added: worker snapshots `/data` before termination and uploads archive metadata into `dataSnapshots`.
+- Restore on boot added: new workers can rehydrate from latest snapshot archive.
+- Hydration improved with `conversationHydrationCache` delta usage.
+- `skillAssets` now contributes to hydration snapshot and fingerprint rebuilds.
+- Worker control/snapshot APIs exposed for runtime loop (`workerControlState`, snapshot upload/finalize/fail, restore lookup).
 
 ## OpenClaw workspace mapping
 

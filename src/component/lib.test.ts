@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { api } from "./_generated/api.js";
+import { api, internal } from "./_generated/api.js";
 import { initConvexTest } from "./setup.test.js";
 
 describe("component lib", () => {
@@ -19,7 +19,6 @@ describe("component lib", () => {
       soulMd: "# Soul",
       clientMd: "# Client",
       skills: ["agent-bridge"],
-      runtimeConfig: { model: "gpt-5" },
       secretsRef: ["telegram.botToken"],
       enabled: true,
     });
@@ -50,7 +49,6 @@ describe("component lib", () => {
       soulMd: "# Soul",
       clientMd: "# Client",
       skills: ["agent-bridge"],
-      runtimeConfig: { model: "gpt-5" },
       secretsRef: [],
       enabled: true,
     });
@@ -60,7 +58,6 @@ describe("component lib", () => {
       soulMd: "# Soul",
       clientMd: "# Client",
       skills: ["agent-bridge"],
-      runtimeConfig: { model: "gpt-5" },
       secretsRef: [],
       enabled: true,
     });
@@ -106,5 +103,61 @@ describe("component lib", () => {
       telegramChatId: "tg-chat-1",
     });
     expect(afterRevoke.agentKey).toBeNull();
+  });
+
+  test("worker scheduling should set idle shutdown from last claim", async () => {
+    const t = initConvexTest();
+    const now = Date.now();
+    vi.setSystemTime(now);
+    await t.mutation(api.queue.upsertAgentProfile, {
+      agentKey: "support-agent",
+      version: "1.0.0",
+      soulMd: "# Soul",
+      clientMd: "# Client",
+      skills: ["agent-bridge"],
+      secretsRef: [],
+      enabled: true,
+    });
+    const messageId = await t.mutation(api.lib.enqueue, {
+      conversationId: "telegram:chat:2",
+      agentKey: "support-agent",
+      payload: {
+        provider: "telegram",
+        providerUserId: "u2",
+        messageText: "ciao",
+      },
+    });
+    const claim = await t.mutation(api.lib.claim, { workerId: "worker-2" });
+    expect(claim).not.toBeNull();
+    expect(claim?.messageId).toBe(messageId);
+    const completed = await t.mutation(api.lib.complete, {
+      workerId: "worker-2",
+      messageId,
+      leaseId: claim?.leaseId ?? "",
+    });
+    expect(completed).toBe(true);
+    const workers = await t.query((internal.queue as any).listWorkersForScheduler, {});
+    const worker = workers.find((row: { workerId: string }) => row.workerId === "worker-2");
+    expect(worker?.status).toBe("idle");
+    expect(worker?.scheduledShutdownAt).toBe(now + 300_000);
+  });
+
+  test("drain request should require snapshot ack", async () => {
+    const t = initConvexTest();
+    await t.mutation(internal.queue.upsertWorkerState, {
+      workerId: "worker-drain-1",
+      provider: "fly",
+      status: "active",
+      load: 0,
+    });
+    const requested = await t.mutation(internal.queue.requestWorkerDrain as any, {
+      workerId: "worker-drain-1",
+    });
+    expect(requested).toBe(true);
+    const control = await t.query(api.queue.getWorkerControlState as any, {
+      workerId: "worker-drain-1",
+    });
+    expect(control.shouldDrain).toBe(true);
+    expect(control.snapshotRequired).toBe(true);
   });
 });

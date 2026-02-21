@@ -24,10 +24,12 @@ const queuePayloadValidator = v.object({
   metadata: v.optional(v.record(v.string(), v.string())),
 });
 
-const runtimeConfigValidator = v.record(
-  v.string(),
-  v.union(v.string(), v.number(), v.boolean()),
+const snapshotReasonValidator = v.union(
+  v.literal("drain"),
+  v.literal("signal"),
+  v.literal("manual"),
 );
+const DATA_SNAPSHOT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 const claimedJobValidator = v.object({
   messageId: v.id("messageQueue"),
@@ -102,6 +104,7 @@ export const enqueueMessage = mutation({
 export const appendConversationMessages = mutation({
   args: {
     conversationId: v.string(),
+    workspaceId: v.optional(v.string()),
     messages: v.array(
       v.object({
         role: v.union(
@@ -134,9 +137,33 @@ export const appendConversationMessages = mutation({
       content: message.content,
       at: message.at ?? nowMs + index,
     }));
-    await ctx.db.patch(conversation._id, {
-      contextHistory: [...conversation.contextHistory, ...messages],
-    });
+    const nextContextHistory = [...conversation.contextHistory, ...messages];
+    await ctx.db.patch(conversation._id, { contextHistory: nextContextHistory });
+    const snapshotKey = `${args.workspaceId ?? "default"}:${conversation.agentKey}`;
+    const cache = await ctx.db
+      .query("conversationHydrationCache")
+      .withIndex("by_conversationId", (q) => q.eq("conversationId", args.conversationId))
+      .first();
+    const deltaContext = nextContextHistory.slice(-64);
+    const deltaFingerprint = fingerprintConversationDelta(deltaContext);
+    if (!cache) {
+      await ctx.db.insert("conversationHydrationCache", {
+        conversationId: args.conversationId,
+        agentKey: conversation.agentKey,
+        snapshotKey,
+        lastHydratedAt: nowMs,
+        deltaContext,
+        deltaFingerprint,
+      });
+    } else {
+      await ctx.db.patch(cache._id, {
+        agentKey: conversation.agentKey,
+        snapshotKey,
+        lastHydratedAt: nowMs,
+        deltaContext,
+        deltaFingerprint,
+      });
+    }
     return { updated: true, messageCount: messages.length };
   },
 });
@@ -148,10 +175,6 @@ export const upsertAgentProfile = mutation({
     soulMd: v.string(),
     clientMd: v.optional(v.string()),
     skills: v.array(v.string()),
-    runtimeConfig: v.record(
-      v.string(),
-      v.union(v.string(), v.number(), v.boolean()),
-    ),
     secretsRef: v.array(v.string()),
     enabled: v.boolean(),
   },
@@ -263,6 +286,49 @@ export const getActiveSecretPlaintext = internalQuery({
   },
 });
 
+export const generateMediaUploadUrl = mutation({
+  args: {},
+  returns: v.object({
+    uploadUrl: v.string(),
+  }),
+  handler: async (ctx) => {
+    const uploadUrl = await ctx.storage.generateUploadUrl();
+    return { uploadUrl };
+  },
+});
+
+export const getStorageFileUrl = query({
+  args: {
+    storageId: v.id("_storage"),
+  },
+  returns: v.union(v.null(), v.string()),
+  handler: async (ctx, args) => {
+    return await ctx.storage.getUrl(args.storageId);
+  },
+});
+
+export const attachMessageMetadata = mutation({
+  args: {
+    messageId: v.id("messageQueue"),
+    metadata: v.record(v.string(), v.string()),
+  },
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    const message = await ctx.db.get(args.messageId);
+    if (!message) return false;
+    await ctx.db.patch(message._id, {
+      payload: {
+        ...message.payload,
+        metadata: {
+          ...(message.payload.metadata ?? {}),
+          ...args.metadata,
+        },
+      },
+    });
+    return true;
+  },
+});
+
 export const claimNextJob = mutation({
   args: {
     workerId: v.string(),
@@ -329,6 +395,10 @@ export const claimNextJob = mutation({
           load: 1,
           heartbeatAt: nowMs,
           lastClaimAt: nowMs,
+          scheduledShutdownAt: computeScheduledShutdownAt(nowMs),
+          drainRequestedAt: undefined,
+          drainDeadlineAt: undefined,
+          drainSnapshotAckAt: undefined,
           capabilities: [],
         });
       } else {
@@ -337,6 +407,10 @@ export const claimNextJob = mutation({
           load: worker.load + 1,
           heartbeatAt: nowMs,
           lastClaimAt: nowMs,
+          scheduledShutdownAt: computeScheduledShutdownAt(nowMs),
+          drainRequestedAt: undefined,
+          drainDeadlineAt: undefined,
+          drainSnapshotAckAt: undefined,
         });
       }
 
@@ -456,9 +530,15 @@ export const completeJob = mutation({
       .withIndex("by_workerId", (q) => q.eq("workerId", args.workerId))
       .unique();
     if (worker) {
+      const nextLoad = Math.max(0, worker.load - 1);
       await ctx.db.patch(worker._id, {
-        load: Math.max(0, worker.load - 1),
+        load: nextLoad,
+        status: nextLoad === 0 ? "idle" : "active",
         heartbeatAt: nowMs,
+        scheduledShutdownAt:
+          nextLoad === 0
+            ? computeScheduledShutdownAt(worker.lastClaimAt ?? nowMs)
+            : worker.scheduledShutdownAt,
       });
     }
     return true;
@@ -537,9 +617,15 @@ export const failJob = mutation({
       .withIndex("by_workerId", (q) => q.eq("workerId", args.workerId))
       .unique();
     if (worker) {
+      const nextLoad = Math.max(0, worker.load - 1);
       await ctx.db.patch(worker._id, {
-        load: Math.max(0, worker.load - 1),
+        load: nextLoad,
+        status: nextLoad === 0 ? "idle" : "active",
         heartbeatAt: nowMs,
+        scheduledShutdownAt:
+          nextLoad === 0
+            ? computeScheduledShutdownAt(worker.lastClaimAt ?? nowMs)
+            : worker.scheduledShutdownAt,
       });
     }
 
@@ -638,6 +724,36 @@ export const prepareHydrationSnapshot = internalMutation({
         )
         .collect()
     ).filter((skill) => skill.workspaceId === args.workspaceId);
+    const includeSkillAssets =
+      DEFAULT_CONFIG.hydration.skillAssetScanMode === "manifest_and_assets";
+    const assetsBySkill = new Map<
+      string,
+      Array<{
+        assetPath: string;
+        assetType: "script" | "config" | "venv" | "other";
+        contentHash: string;
+        sizeBytes: number;
+      }>
+    >();
+    if (includeSkillAssets) {
+      for (const skill of skills) {
+        const skillAssets = await ctx.db
+          .query("skillAssets")
+          .withIndex("by_workspaceId_and_skillKey", (q) =>
+            q.eq("workspaceId", args.workspaceId).eq("skillKey", skill.skillKey),
+          )
+          .collect();
+        assetsBySkill.set(
+          skill.skillKey,
+          skillAssets.map((asset) => ({
+            assetPath: asset.assetPath,
+            assetType: asset.assetType,
+            contentHash: asset.contentHash,
+            sizeBytes: asset.sizeBytes,
+          })),
+        );
+      }
+    }
 
     const secretFingerprints: Array<string> = [];
     for (const ref of agentProfile.secretsRef) {
@@ -656,6 +772,9 @@ export const prepareHydrationSnapshot = internalMutation({
       agentProfile.version,
       ...docs.map((doc) => `${doc.path}:${doc.contentHash}:${doc.version}`),
       ...skills.map((skill) => `${skill.skillKey}:${skill.updatedAt}`),
+      ...[...assetsBySkill.entries()].flatMap(([skillKey, assets]) =>
+        assets.map((asset) => `${skillKey}:${asset.assetPath}:${asset.contentHash}`),
+      ),
       ...secretFingerprints,
     ].join("|");
 
@@ -715,6 +834,7 @@ export const prepareHydrationSnapshot = internalMutation({
       skillsBundle: skills.map((skill) => ({
         skillKey: skill.skillKey,
         manifestMd: skill.manifestMd,
+        assets: assetsBySkill.get(skill.skillKey),
       })),
       memoryWindow,
       tokenEstimate: estimateTokens(promptSections, memoryWindow),
@@ -759,6 +879,21 @@ export const getHydrationBundleForClaimedJob = query({
             v.object({
               skillKey: v.string(),
               manifestMd: v.string(),
+              assets: v.optional(
+                v.array(
+                  v.object({
+                    assetPath: v.string(),
+                    assetType: v.union(
+                      v.literal("script"),
+                      v.literal("config"),
+                      v.literal("venv"),
+                      v.literal("other"),
+                    ),
+                    contentHash: v.string(),
+                    sizeBytes: v.number(),
+                  }),
+                ),
+              ),
             }),
           ),
           memoryWindow: v.array(
@@ -796,7 +931,6 @@ export const getHydrationBundleForClaimedJob = query({
         ),
       }),
       telegramBotToken: v.union(v.null(), v.string()),
-      runtimeConfig: runtimeConfigValidator,
     }),
   ),
   handler: async (ctx, args) => {
@@ -820,12 +954,16 @@ export const getHydrationBundleForClaimedJob = query({
       .query("hydrationSnapshots")
       .withIndex("by_snapshotKey", (q) => q.eq("snapshotKey", snapshotKey))
       .first();
+    const conversationCache = await ctx.db
+      .query("conversationHydrationCache")
+      .withIndex("by_conversationId", (q) => q.eq("conversationId", message.conversationId))
+      .first();
 
-    const telegramSecretRef = profile.secretsRef.find(
+    let telegramBotToken: string | null = null;
+    const telegramSecretRefs = profile.secretsRef.filter(
       (ref) => ref === "telegram.botToken" || ref.startsWith("telegram.botToken."),
     );
-    let telegramBotToken: string | null = null;
-    if (telegramSecretRef) {
+    for (const telegramSecretRef of telegramSecretRefs) {
       const activeSecret = await ctx.db
         .query("secrets")
         .withIndex("by_secretRef_and_active", (q) =>
@@ -834,8 +972,14 @@ export const getHydrationBundleForClaimedJob = query({
         .unique();
       if (activeSecret) {
         telegramBotToken = decryptSecretValue(activeSecret.encryptedValue, activeSecret.algorithm);
+        break;
       }
     }
+
+    const contextHistory =
+      conversationCache && conversationCache.snapshotKey === snapshotKey
+        ? conversationCache.deltaContext
+        : conversation.contextHistory;
 
     return {
       messageId: message._id,
@@ -852,11 +996,10 @@ export const getHydrationBundleForClaimedJob = query({
           }
         : null,
       conversationState: {
-        contextHistory: conversation.contextHistory,
+        contextHistory,
         pendingToolCalls: conversation.pendingToolCalls,
       },
       telegramBotToken,
-      runtimeConfig: profile.runtimeConfig,
     };
   },
 });
@@ -1003,7 +1146,7 @@ export const upsertWorkerState = internalMutation({
       status: args.status,
       load: args.load,
       heartbeatAt: nowMs,
-      scheduledShutdownAt: args.scheduledShutdownAt,
+      scheduledShutdownAt: args.scheduledShutdownAt ?? worker.scheduledShutdownAt,
       machineRef:
         args.machineId && args.appName
           ? {
@@ -1014,6 +1157,273 @@ export const upsertWorkerState = internalMutation({
           : worker.machineRef,
     });
     return null;
+  },
+});
+
+export const requestWorkerDrain = internalMutation({
+  args: {
+    workerId: v.string(),
+    nowMs: v.optional(v.number()),
+    timeoutMs: v.optional(v.number()),
+  },
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    const nowMs = args.nowMs ?? Date.now();
+    const timeoutMs = Math.max(10_000, args.timeoutMs ?? 60_000);
+    const worker = await ctx.db
+      .query("workers")
+      .withIndex("by_workerId", (q) => q.eq("workerId", args.workerId))
+      .unique();
+    if (!worker) return false;
+    await ctx.db.patch(worker._id, {
+      status: "draining",
+      drainRequestedAt: nowMs,
+      drainDeadlineAt: nowMs + timeoutMs,
+      drainSnapshotAckAt: undefined,
+    });
+    return true;
+  },
+});
+
+export const getWorkerControlState = query({
+  args: {
+    workerId: v.string(),
+  },
+  returns: v.object({
+    shouldDrain: v.boolean(),
+    snapshotRequired: v.boolean(),
+    drainRequestedAt: v.union(v.null(), v.number()),
+    drainDeadlineAt: v.union(v.null(), v.number()),
+  }),
+  handler: async (ctx, args) => {
+    const worker = await ctx.db
+      .query("workers")
+      .withIndex("by_workerId", (q) => q.eq("workerId", args.workerId))
+      .unique();
+    if (!worker) {
+      return {
+        shouldDrain: false,
+        snapshotRequired: false,
+        drainRequestedAt: null,
+        drainDeadlineAt: null,
+      };
+    }
+    const shouldDrain = worker.status === "draining";
+    const drainRequestedAt = worker.drainRequestedAt ?? null;
+    const snapshotRequired =
+      shouldDrain &&
+      drainRequestedAt !== null &&
+      (worker.drainSnapshotAckAt ?? 0) < drainRequestedAt;
+    return {
+      shouldDrain,
+      snapshotRequired,
+      drainRequestedAt,
+      drainDeadlineAt: worker.drainDeadlineAt ?? null,
+    };
+  },
+});
+
+export const prepareDataSnapshotUpload = mutation({
+  args: {
+    workerId: v.string(),
+    workspaceId: v.string(),
+    agentKey: v.string(),
+    conversationId: v.optional(v.string()),
+    reason: snapshotReasonValidator,
+    nowMs: v.optional(v.number()),
+  },
+  returns: v.object({
+    snapshotId: v.id("dataSnapshots"),
+    uploadUrl: v.string(),
+    expiresAt: v.number(),
+  }),
+  handler: async (ctx, args) => {
+    const nowMs = args.nowMs ?? Date.now();
+    const expiresAt = nowMs + DATA_SNAPSHOT_RETENTION_MS;
+    const snapshotId = await ctx.db.insert("dataSnapshots", {
+      workspaceId: args.workspaceId,
+      agentKey: args.agentKey,
+      workerId: args.workerId,
+      conversationId: args.conversationId,
+      reason: args.reason,
+      formatVersion: 1,
+      status: "uploading",
+      createdAt: nowMs,
+      expiresAt,
+    });
+    const uploadUrl = await ctx.storage.generateUploadUrl();
+    return { snapshotId, uploadUrl, expiresAt };
+  },
+});
+
+export const finalizeDataSnapshotUpload = mutation({
+  args: {
+    workerId: v.string(),
+    snapshotId: v.id("dataSnapshots"),
+    storageId: v.id("_storage"),
+    sha256: v.string(),
+    sizeBytes: v.number(),
+    nowMs: v.optional(v.number()),
+  },
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    const nowMs = args.nowMs ?? Date.now();
+    const snapshot = await ctx.db.get(args.snapshotId);
+    if (!snapshot || snapshot.workerId !== args.workerId) return false;
+    await ctx.db.patch(snapshot._id, {
+      archiveFileId: args.storageId,
+      sha256: args.sha256,
+      sizeBytes: args.sizeBytes,
+      status: "ready",
+      completedAt: nowMs,
+    });
+    const worker = await ctx.db
+      .query("workers")
+      .withIndex("by_workerId", (q) => q.eq("workerId", args.workerId))
+      .unique();
+    if (worker) {
+      await ctx.db.patch(worker._id, {
+        drainSnapshotAckAt: nowMs,
+        lastSnapshotId: snapshot._id,
+      });
+    }
+    return true;
+  },
+});
+
+export const failDataSnapshotUpload = mutation({
+  args: {
+    workerId: v.string(),
+    snapshotId: v.id("dataSnapshots"),
+    error: v.string(),
+    nowMs: v.optional(v.number()),
+  },
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    const nowMs = args.nowMs ?? Date.now();
+    const snapshot = await ctx.db.get(args.snapshotId);
+    if (!snapshot || snapshot.workerId !== args.workerId) return false;
+    await ctx.db.patch(snapshot._id, {
+      status: "failed",
+      error: args.error,
+      completedAt: nowMs,
+    });
+    return true;
+  },
+});
+
+export const getLatestDataSnapshotForRestore = query({
+  args: {
+    workspaceId: v.string(),
+    agentKey: v.string(),
+    conversationId: v.optional(v.string()),
+    nowMs: v.optional(v.number()),
+  },
+  returns: v.union(
+    v.null(),
+    v.object({
+      snapshotId: v.id("dataSnapshots"),
+      downloadUrl: v.string(),
+      sha256: v.union(v.null(), v.string()),
+      sizeBytes: v.union(v.null(), v.number()),
+      createdAt: v.number(),
+    }),
+  ),
+  handler: async (ctx, args) => {
+    const nowMs = args.nowMs ?? Date.now();
+    const candidates = await ctx.db
+      .query("dataSnapshots")
+      .withIndex("by_workspaceId_and_agentKey_and_createdAt", (q) =>
+        q.eq("workspaceId", args.workspaceId).eq("agentKey", args.agentKey),
+      )
+      .order("desc")
+      .take(50);
+    const ready = candidates.filter(
+      (snapshot) =>
+        snapshot.status === "ready" &&
+        snapshot.archiveFileId !== undefined &&
+        snapshot.expiresAt > nowMs,
+    );
+    const preferred =
+      (args.conversationId
+        ? ready.find((snapshot) => snapshot.conversationId === args.conversationId)
+        : undefined) ?? ready[0];
+    if (!preferred || !preferred.archiveFileId) return null;
+    const downloadUrl = await ctx.storage.getUrl(preferred.archiveFileId);
+    if (!downloadUrl) return null;
+    return {
+      snapshotId: preferred._id,
+      downloadUrl,
+      sha256: preferred.sha256 ?? null,
+      sizeBytes: preferred.sizeBytes ?? null,
+      createdAt: preferred.createdAt,
+    };
+  },
+});
+
+export const listWorkersForScheduler = internalQuery({
+  args: {},
+  returns: v.array(
+    v.object({
+      workerId: v.string(),
+      status: v.union(
+        v.literal("starting"),
+        v.literal("active"),
+        v.literal("idle"),
+        v.literal("draining"),
+        v.literal("stopped"),
+        v.literal("failed"),
+      ),
+      load: v.number(),
+      heartbeatAt: v.number(),
+      lastClaimAt: v.union(v.null(), v.number()),
+      scheduledShutdownAt: v.union(v.null(), v.number()),
+      drainRequestedAt: v.union(v.null(), v.number()),
+      drainDeadlineAt: v.union(v.null(), v.number()),
+      drainSnapshotAckAt: v.union(v.null(), v.number()),
+      machineId: v.union(v.null(), v.string()),
+      appName: v.union(v.null(), v.string()),
+      region: v.union(v.null(), v.string()),
+    }),
+  ),
+  handler: async (ctx) => {
+    const rows = await ctx.db.query("workers").collect();
+    return rows.map((worker) => ({
+      workerId: worker.workerId,
+      status: worker.status,
+      load: worker.load,
+      heartbeatAt: worker.heartbeatAt,
+      lastClaimAt: worker.lastClaimAt ?? null,
+      scheduledShutdownAt: worker.scheduledShutdownAt ?? null,
+      drainRequestedAt: worker.drainRequestedAt ?? null,
+      drainDeadlineAt: worker.drainDeadlineAt ?? null,
+      drainSnapshotAckAt: worker.drainSnapshotAckAt ?? null,
+      machineId: worker.machineRef?.machineId ?? null,
+      appName: worker.machineRef?.appName ?? null,
+      region: worker.machineRef?.region ?? null,
+    }));
+  },
+});
+
+export const expireOldDataSnapshots = internalMutation({
+  args: {
+    nowMs: v.optional(v.number()),
+    limit: v.optional(v.number()),
+  },
+  returns: v.number(),
+  handler: async (ctx, args) => {
+    const nowMs = args.nowMs ?? Date.now();
+    const limit = args.limit ?? 100;
+    const rows = await ctx.db
+      .query("dataSnapshots")
+      .withIndex("by_status_and_expiresAt", (q) =>
+        q.eq("status", "ready").lte("expiresAt", nowMs),
+      )
+      .take(limit);
+    for (const row of rows) {
+      await ctx.db.patch(row._id, { status: "expired" });
+    }
+    return rows.length;
   },
 });
 
@@ -1053,10 +1463,14 @@ export const getWorkerStats = query({
       .query("workers")
       .withIndex("by_status", (q) => q.eq("status", "starting"))
       .collect();
+    const drainingWorkers = await ctx.db
+      .query("workers")
+      .withIndex("by_status", (q) => q.eq("status", "draining"))
+      .collect();
 
-    const merged = [...workers, ...idleWorkers, ...startingWorkers];
+    const merged = [...workers, ...idleWorkers, ...startingWorkers, ...drainingWorkers];
     return {
-      activeCount: workers.length + startingWorkers.length,
+      activeCount: workers.length + startingWorkers.length + drainingWorkers.length,
       idleCount: idleWorkers.length,
       workers: merged.map((worker) => ({
         workerId: worker.workerId,
@@ -1121,6 +1535,22 @@ function estimateTokens(
     0,
   );
   return Math.ceil((sectionChars + memoryChars) / 4);
+}
+
+function computeScheduledShutdownAt(lastClaimAt: number): number {
+  return lastClaimAt + DEFAULT_CONFIG.scaling.idleTimeoutMs;
+}
+
+function fingerprintConversationDelta(
+  deltaContext: Array<{ role: "system" | "user" | "assistant" | "tool"; content: string; at: number }>,
+): string {
+  const payload = deltaContext.map((entry) => `${entry.role}:${entry.at}:${entry.content}`).join("|");
+  let hash = 2166136261;
+  for (let index = 0; index < payload.length; index += 1) {
+    hash ^= payload.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `f${(hash >>> 0).toString(16)}`;
 }
 
 function encryptSecretValue(plaintext: string): string {
