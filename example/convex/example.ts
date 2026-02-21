@@ -125,6 +125,7 @@ export const {
   workerComplete,
   workerFail,
   workerHydrationBundle,
+  workerConversationHasQueued,
   workerAppendConversationMessages,
   queueStats,
   workerStats,

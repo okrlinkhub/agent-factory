@@ -46,6 +46,9 @@ export type ProviderConfig = {
   organizationSlug: string;
   image: string;
   region: string;
+  volumeName: string;
+  volumePath: string;
+  volumeSizeGb: number;
 };
 
 export type AgentFactoryConfig = {
@@ -55,6 +58,29 @@ export type AgentFactoryConfig = {
   scaling: ScalingPolicy;
   hydration: HydrationPolicy;
   provider: ProviderConfig;
+};
+
+export const DEFAULT_WORKER_IMAGE =
+  "registry.fly.io/agent-factory-workers:deployment-01KHZ1R7TKE7KHNA20GW336XD7";
+export const DEFAULT_WORKER_VOLUME_NAME = "openclaw_data";
+export const DEFAULT_WORKER_VOLUME_PATH = "/data";
+export const DEFAULT_WORKER_RUNTIME_ENV: Record<string, string> = {
+  NODE_ENV: "production",
+  OPENCLAW_COMMAND: "/app/openclaw.mjs",
+  OPENCLAW_GATEWAY_HOST: "127.0.0.1",
+  OPENCLAW_GATEWAY_PORT: "18789",
+  OPENCLAW_GATEWAY_URL: "http://127.0.0.1:18789",
+  OPENCLAW_STATE_DIR: "/data/.clawdbot",
+  OPENCLAW_WORKSPACE_DIR: "/data/workspace",
+  OPENCLAW_CONFIG_PATH: "/data/.clawdbot/openclaw.json",
+  OPENCLAW_REQUIRE_DATA_MOUNT: "true",
+  OPENCLAW_SETUP_COMMAND: "node /app/openclaw.mjs --dev setup",
+  OPENCLAW_RUN_SETUP: "false",
+  OPENCLAW_SETUP_TIMEOUT_MS: "90000",
+  OPENCLAW_GATEWAY_COMMAND: "node /app/openclaw.mjs gateway",
+  OPENCLAW_GATEWAY_READY_TIMEOUT_MS: "30000",
+  OPENCLAW_GATEWAY_READY_POLL_MS: "500",
+  OPENCLAW_GATEWAY_CHECK_TIMEOUT_MS: "2500",
 };
 
 export const queuePolicyValidator = v.object({
@@ -104,6 +130,9 @@ export const providerConfigValidator = v.object({
   organizationSlug: v.string(),
   image: v.string(),
   region: v.string(),
+  volumeName: v.string(),
+  volumePath: v.string(),
+  volumeSizeGb: v.number(),
 });
 
 export const agentFactoryConfigValidator = v.object({
@@ -135,7 +164,7 @@ export const DEFAULT_CONFIG: AgentFactoryConfig = {
   },
   scaling: {
     minWorkers: 0,
-    maxWorkers: 20,
+    maxWorkers: 1,
     queuePerWorkerTarget: 5,
     spawnStep: 1,
     drainStep: 1,
@@ -153,8 +182,11 @@ export const DEFAULT_CONFIG: AgentFactoryConfig = {
     kind: "fly",
     appName: "agent-factory-workers",
     organizationSlug: "personal",
-    image: "registry.fly.io/agent-factory-workers:deployment-01KHXBS741E87C0TE9QA76GS59",
-    region: "ams",
+    image: DEFAULT_WORKER_IMAGE,
+    region: "iad",
+    volumeName: DEFAULT_WORKER_VOLUME_NAME,
+    volumePath: DEFAULT_WORKER_VOLUME_PATH,
+    volumeSizeGb: 10,
   },
 };
 

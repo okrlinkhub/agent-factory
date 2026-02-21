@@ -3,6 +3,7 @@ import { api, internal } from "./_generated/api.js";
 import { action, internalAction } from "./_generated/server.js";
 import {
   DEFAULT_CONFIG,
+  DEFAULT_WORKER_RUNTIME_ENV,
   providerConfigValidator,
   scalingPolicyValidator,
 } from "./config.js";
@@ -74,11 +75,27 @@ export const reconcileWorkerPool = action({
         (worker.appName === null || worker.appName === providerConfig.appName),
     );
     const liveMachineIds = new Set<string>();
+    const liveMachineImages = new Set<string>();
     let staleWorkers: Array<(typeof workerStats.workers)[number]> = [];
     if (localWorkersWithMachine.length > 0) {
       const providerWorkers = await provider.listWorkers(providerConfig.appName);
       for (const worker of providerWorkers) {
         liveMachineIds.add(worker.machineId);
+        if (worker.image) {
+          liveMachineImages.add(worker.image);
+        }
+      }
+      if (liveMachineImages.size > 1) {
+        console.warn(
+          `[scheduler] mixed machine images detected for app=${providerConfig.appName}: ${[
+            ...liveMachineImages,
+          ].join(", ")}`,
+        );
+      }
+      if (liveMachineImages.size > 0 && !liveMachineImages.has(providerConfig.image)) {
+        console.warn(
+          `[scheduler] target image ${providerConfig.image} is not active yet for app=${providerConfig.appName}`,
+        );
       }
       staleWorkers = localWorkersWithMachine.filter(
         (worker) => worker.machineId && !liveMachineIds.has(worker.machineId),
@@ -104,11 +121,21 @@ export const reconcileWorkerPool = action({
     const computedDesired = Math.ceil(
       queueStats.queuedReady / Math.max(1, scaling.queuePerWorkerTarget),
     );
-    const desiredWorkers = clamp(
+    const dedicatedVolumeMode =
+      providerConfig.volumeName.trim().length > 0 && providerConfig.volumePath.trim().length > 0;
+    const unconstrainedDesiredWorkers = clamp(
       computedDesired,
       scaling.minWorkers,
       scaling.maxWorkers,
     );
+    const desiredWorkers = dedicatedVolumeMode
+      ? Math.min(1, unconstrainedDesiredWorkers)
+      : unconstrainedDesiredWorkers;
+    if (dedicatedVolumeMode && unconstrainedDesiredWorkers > 1) {
+      console.warn(
+        `[scheduler] dedicated volume mode enabled for ${providerConfig.volumeName}; clamping desired workers to 1`,
+      );
+    }
     const activeWorkers = workerStats.activeCount;
 
     let spawned = 0;
@@ -123,7 +150,11 @@ export const reconcileWorkerPool = action({
           appName: providerConfig.appName,
           image: providerConfig.image,
           region: providerConfig.region,
+          volumeName: providerConfig.volumeName,
+          volumePath: providerConfig.volumePath,
+          volumeSizeGb: providerConfig.volumeSizeGb,
           env: {
+            ...DEFAULT_WORKER_RUNTIME_ENV,
             CONVEX_URL: convexUrl,
             WORKSPACE_ID: workspaceId,
             WORKER_ID: workerId,

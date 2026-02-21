@@ -74,6 +74,7 @@ export function exposeApi(
     workerClaim: mutationGeneric({
       args: {
         workerId: v.string(),
+        conversationId: v.optional(v.string()),
       },
       handler: async (ctx, args) => {
         await options.auth(ctx, { type: "write" });
@@ -122,6 +123,15 @@ export function exposeApi(
       handler: async (ctx, args) => {
         await options.auth(ctx, { type: "read" });
         return await ctx.runQuery(component.queue.getHydrationBundleForClaimedJob, args);
+      },
+    }),
+    workerConversationHasQueued: queryGeneric({
+      args: {
+        conversationId: v.string(),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runQuery(component.queue.hasQueuedJobsForConversation, args);
       },
     }),
     workerAppendConversationMessages: mutationGeneric({

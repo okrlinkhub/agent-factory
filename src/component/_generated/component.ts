@@ -193,7 +193,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       claim: FunctionReference<
         "mutation",
         "internal",
-        { nowMs?: number; workerId: string },
+        { conversationId?: string; nowMs?: number; workerId: string },
         null | {
           agentKey: string;
           conversationId: string;
@@ -441,6 +441,9 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             kind: "fly" | "runpod" | "ecs";
             organizationSlug: string;
             region: string;
+            volumeName: string;
+            volumePath: string;
+            volumeSizeGb: number;
           };
           scalingPolicy?: {
             drainStep: number;
@@ -537,7 +540,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       claimNextJob: FunctionReference<
         "mutation",
         "internal",
-        { nowMs?: number; workerId: string },
+        { conversationId?: string; nowMs?: number; workerId: string },
         null | {
           agentKey: string;
           conversationId: string;
@@ -690,6 +693,13 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         },
         Name
       >;
+      hasQueuedJobsForConversation: FunctionReference<
+        "query",
+        "internal",
+        { conversationId: string; nowMs?: number },
+        boolean,
+        Name
+      >;
       heartbeatJob: FunctionReference<
         "mutation",
         "internal",
@@ -765,6 +775,9 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             kind: "fly" | "runpod" | "ecs";
             organizationSlug: string;
             region: string;
+            volumeName: string;
+            volumePath: string;
+            volumeSizeGb: number;
           };
           scalingPolicy?: {
             drainStep: number;
