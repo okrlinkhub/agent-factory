@@ -903,6 +903,23 @@ export const getQueueStats = query({
   },
 });
 
+export const hasQueuedJobsForConversation = query({
+  args: {
+    conversationId: v.string(),
+  },
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    const queuedJob = await ctx.db
+      .query("messageQueue")
+      .withIndex("by_conversationId_and_status", (q) =>
+        q.eq("conversationId", args.conversationId).eq("status", "queued"),
+      )
+      .first();
+
+    return queuedJob !== null;
+  },
+});
+
 export const listJobsByStatus = query({
   args: {
     status: queueStatusValidator,

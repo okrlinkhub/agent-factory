@@ -61,12 +61,11 @@ export type AgentFactoryConfig = {
 };
 
 export const DEFAULT_WORKER_IMAGE =
-  "registry.fly.io/agent-factory-workers:deployment-01KHZ3DYQQTZKYCD35803C1SA6";
+  "registry.fly.io/agent-factory-workers:deployment-01KHZ6J9CWP86NB9P399YET5A1";
 export const DEFAULT_WORKER_VOLUME_NAME = "openclaw_data";
 export const DEFAULT_WORKER_VOLUME_PATH = "/data";
 export const DEFAULT_WORKER_RUNTIME_ENV: Record<string, string> = {
   NODE_ENV: "production",
-  OPENCLAW_COMMAND: "/app/openclaw.mjs",
   OPENCLAW_GATEWAY_HOST: "127.0.0.1",
   OPENCLAW_GATEWAY_PORT: "18789",
   OPENCLAW_GATEWAY_URL: "http://127.0.0.1:18789",
@@ -74,13 +73,12 @@ export const DEFAULT_WORKER_RUNTIME_ENV: Record<string, string> = {
   OPENCLAW_WORKSPACE_DIR: "/data/workspace",
   OPENCLAW_CONFIG_PATH: "/data/.clawdbot/openclaw.json",
   OPENCLAW_REQUIRE_DATA_MOUNT: "true",
-  OPENCLAW_SETUP_COMMAND: "node /app/openclaw.mjs --dev setup",
   OPENCLAW_RUN_SETUP: "false",
   OPENCLAW_SETUP_TIMEOUT_MS: "90000",
   OPENCLAW_GATEWAY_COMMAND: "node /app/openclaw.mjs gateway",
-  OPENCLAW_GATEWAY_READY_TIMEOUT_MS: "30000",
+  OPENCLAW_GATEWAY_READY_TIMEOUT_MS: "60000",
   OPENCLAW_GATEWAY_READY_POLL_MS: "500",
-  OPENCLAW_GATEWAY_CHECK_TIMEOUT_MS: "2500",
+  OPENCLAW_GATEWAY_READY_REQUIRED: "true",
 };
 
 export const queuePolicyValidator = v.object({

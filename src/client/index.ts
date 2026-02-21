@@ -78,7 +78,8 @@ export function exposeApi(
       },
       handler: async (ctx, args) => {
         await options.auth(ctx, { type: "write" });
-        return await ctx.runMutation(component.queue.claimNextJob, args);
+        const { conversationId: _, ...claimArgs } = args;
+        return await ctx.runMutation(component.queue.claimNextJob, claimArgs);
       },
     }),
     workerHeartbeat: mutationGeneric({

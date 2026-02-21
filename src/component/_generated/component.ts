@@ -693,6 +693,13 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         },
         Name
       >;
+      hasQueuedJobsForConversation: FunctionReference<
+        "query",
+        "internal",
+        { conversationId: string },
+        boolean,
+        Name
+      >;
       heartbeatJob: FunctionReference<
         "mutation",
         "internal",
