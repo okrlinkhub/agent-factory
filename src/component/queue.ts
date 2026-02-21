@@ -795,8 +795,6 @@ export const getHydrationBundleForClaimedJob = query({
           }),
         ),
       }),
-      secretRefs: v.array(v.string()),
-      secretValues: v.record(v.string(), v.string()),
       telegramBotToken: v.union(v.null(), v.string()),
       runtimeConfig: runtimeConfigValidator,
     }),
@@ -823,7 +821,7 @@ export const getHydrationBundleForClaimedJob = query({
       .withIndex("by_snapshotKey", (q) => q.eq("snapshotKey", snapshotKey))
       .first();
 
-    const secretValues: Record<string, string> = {};
+    let telegramBotToken: string | null = null;
     for (const secretRef of profile.secretsRef) {
       const activeSecret = await ctx.db
         .query("secrets")
@@ -832,16 +830,10 @@ export const getHydrationBundleForClaimedJob = query({
         )
         .unique();
       if (!activeSecret) continue;
-      secretValues[secretRef] = decryptSecretValue(
-        activeSecret.encryptedValue,
-        activeSecret.algorithm,
-      );
+      if (secretRef === "telegram.botToken" || secretRef.startsWith("telegram.botToken.")) {
+        telegramBotToken = decryptSecretValue(activeSecret.encryptedValue, activeSecret.algorithm);
+      }
     }
-
-    const telegramSecretRef = profile.secretsRef.find(
-      (ref) => ref === "telegram.botToken" || ref.startsWith("telegram.botToken."),
-    );
-    const telegramBotToken = telegramSecretRef ? secretValues[telegramSecretRef] ?? null : null;
 
     return {
       messageId: message._id,
@@ -861,8 +853,6 @@ export const getHydrationBundleForClaimedJob = query({
         contextHistory: conversation.contextHistory,
         pendingToolCalls: conversation.pendingToolCalls,
       },
-      secretRefs: profile.secretsRef,
-      secretValues,
       telegramBotToken,
       runtimeConfig: profile.runtimeConfig,
     };

@@ -351,8 +351,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             rawUpdateJson?: string;
           };
           runtimeConfig: Record<string, string | number | boolean>;
-          secretRefs: Array<string>;
-          secretValues: Record<string, string>;
           snapshot: null | {
             compiledPromptStack: Array<{ content: string; section: string }>;
             memoryWindow: Array<{ excerpt: string; path: string }>;
@@ -638,8 +636,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             rawUpdateJson?: string;
           };
           runtimeConfig: Record<string, string | number | boolean>;
-          secretRefs: Array<string>;
-          secretValues: Record<string, string>;
           snapshot: null | {
             compiledPromptStack: Array<{ content: string; section: string }>;
             memoryWindow: Array<{ excerpt: string; path: string }>;

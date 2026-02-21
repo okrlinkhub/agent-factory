@@ -7,6 +7,7 @@ import {
 import type { Auth, HttpRouter } from "convex/server";
 import { v } from "convex/values";
 import type { ComponentApi } from "../component/_generated/component.js";
+import { scalingPolicyValidator } from "../component/config.js";
 
 export function exposeApi(
   component: ComponentApi,
@@ -199,6 +200,7 @@ export function exposeApi(
         flyApiToken: v.optional(v.string()),
         convexUrl: v.optional(v.string()),
         workspaceId: v.optional(v.string()),
+        scalingPolicy: v.optional(scalingPolicyValidator),
       },
       handler: async (ctx, args) => {
         await options.auth(ctx, { type: "read" });
@@ -206,6 +208,7 @@ export function exposeApi(
           flyApiToken: args.flyApiToken,
           convexUrl: args.convexUrl,
           workspaceId: args.workspaceId,
+          scalingPolicy: args.scalingPolicy,
         });
       },
     }),
