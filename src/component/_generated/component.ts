@@ -261,6 +261,13 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "internal",
         {
           agentKey: string;
+          bridgeConfig?: {
+            appKey?: string;
+            baseUrl?: string;
+            enabled: boolean;
+            serviceId?: string;
+            serviceKeySecretRef?: string;
+          };
           clientMd?: string;
           enabled: boolean;
           secretsRef: Array<string>;
@@ -374,6 +381,13 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         { messageId: string; workspaceId: string },
         null | {
           agentKey: string;
+          bridgeRuntimeConfig: null | {
+            appKey: null | string;
+            baseUrl: null | string;
+            serviceId: null | string;
+            serviceKey: null | string;
+            serviceKeySecretRef: null | string;
+          };
           conversationId: string;
           conversationState: {
             contextHistory: Array<{
@@ -699,6 +713,13 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         { messageId: string; workspaceId: string },
         null | {
           agentKey: string;
+          bridgeRuntimeConfig: null | {
+            appKey: null | string;
+            baseUrl: null | string;
+            serviceId: null | string;
+            serviceKey: null | string;
+            serviceKeySecretRef: null | string;
+          };
           conversationId: string;
           conversationState: {
             contextHistory: Array<{
@@ -870,6 +891,13 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "internal",
         {
           agentKey: string;
+          bridgeConfig?: {
+            appKey?: string;
+            baseUrl?: string;
+            enabled: boolean;
+            serviceId?: string;
+            serviceKeySecretRef?: string;
+          };
           clientMd?: string;
           enabled: boolean;
           secretsRef: Array<string>;

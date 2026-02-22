@@ -47,6 +47,29 @@ const secretStatusValidator = v.object({
   version: v.union(v.null(), v.number()),
 });
 
+const bridgeProfileConfigValidator = v.object({
+  enabled: v.boolean(),
+  baseUrl: v.optional(v.string()),
+  serviceId: v.optional(v.string()),
+  appKey: v.optional(v.string()),
+  serviceKeySecretRef: v.optional(v.string()),
+});
+
+const bridgeRuntimeConfigValidator = v.object({
+  baseUrl: v.union(v.null(), v.string()),
+  serviceId: v.union(v.null(), v.string()),
+  appKey: v.union(v.null(), v.string()),
+  serviceKey: v.union(v.null(), v.string()),
+  serviceKeySecretRef: v.union(v.null(), v.string()),
+});
+
+const BRIDGE_SECRET_REFS = {
+  serviceKey: "agent-bridge.serviceKey",
+  baseUrl: "agent-bridge.baseUrl",
+  serviceId: "agent-bridge.serviceId",
+  appKey: "agent-bridge.appKey",
+} as const;
+
 export const enqueueMessage = mutation({
   args: {
     conversationId: v.string(),
@@ -189,13 +212,15 @@ export const upsertAgentProfile = mutation({
     clientMd: v.optional(v.string()),
     skills: v.array(v.string()),
     secretsRef: v.array(v.string()),
+    bridgeConfig: v.optional(bridgeProfileConfigValidator),
     enabled: v.boolean(),
   },
   returns: v.id("agentProfiles"),
   handler: async (ctx, args) => {
     const defaultSecretsRef: Array<string> = ["convex.url", "fly.apiToken"];
+    const bridgeSecretsRef = getBridgeSecretRefsForProfile(args.agentKey, args.bridgeConfig);
     const secretsRef = Array.from(
-      new Set([...args.secretsRef, ...defaultSecretsRef]),
+      new Set([...args.secretsRef, ...defaultSecretsRef, ...bridgeSecretsRef]),
     );
     const existing = await ctx.db
       .query("agentProfiles")
@@ -829,6 +854,7 @@ export const getHydrationBundleForClaimedJob = query({
         ),
       }),
       telegramBotToken: v.union(v.null(), v.string()),
+      bridgeRuntimeConfig: v.union(v.null(), bridgeRuntimeConfigValidator),
     }),
   ),
   handler: async (ctx, args) => {
@@ -874,6 +900,7 @@ export const getHydrationBundleForClaimedJob = query({
       conversationCache && conversationCache.snapshotKey === snapshotKey
         ? conversationCache.deltaContext
         : conversation.contextHistory;
+    const bridgeRuntimeConfig = await resolveBridgeRuntimeConfig(ctx, profile);
 
     return {
       messageId: message._id,
@@ -885,6 +912,7 @@ export const getHydrationBundleForClaimedJob = query({
         pendingToolCalls: conversation.pendingToolCalls,
       },
       telegramBotToken,
+      bridgeRuntimeConfig,
     };
   },
 });
@@ -1366,6 +1394,111 @@ export const getWorkerStats = query({
     };
   },
 });
+
+async function resolveBridgeRuntimeConfig(
+  ctx: any,
+  profile: {
+    agentKey: string;
+    bridgeConfig?: {
+      enabled: boolean;
+      baseUrl?: string;
+      serviceId?: string;
+      appKey?: string;
+      serviceKeySecretRef?: string;
+    };
+  },
+): Promise<{
+  baseUrl: string | null;
+  serviceId: string | null;
+  appKey: string | null;
+  serviceKey: string | null;
+  serviceKeySecretRef: string | null;
+} | null> {
+  if (!profile.bridgeConfig?.enabled) {
+    return null;
+  }
+
+  const configuredServiceKeySecretRef = profile.bridgeConfig.serviceKeySecretRef ?? null;
+  const [serviceKeySecretRef, serviceKey] = await resolveFirstActiveSecretValue(
+    ctx,
+    getScopedSecretRefCandidates(
+      profile.agentKey,
+      BRIDGE_SECRET_REFS.serviceKey,
+      configuredServiceKeySecretRef,
+    ),
+  );
+
+  const [, baseUrlFromSecret] = await resolveFirstActiveSecretValue(
+    ctx,
+    getScopedSecretRefCandidates(profile.agentKey, BRIDGE_SECRET_REFS.baseUrl),
+  );
+  const [, serviceIdFromSecret] = await resolveFirstActiveSecretValue(
+    ctx,
+    getScopedSecretRefCandidates(profile.agentKey, BRIDGE_SECRET_REFS.serviceId),
+  );
+  const [, appKeyFromSecret] = await resolveFirstActiveSecretValue(
+    ctx,
+    getScopedSecretRefCandidates(profile.agentKey, BRIDGE_SECRET_REFS.appKey),
+  );
+
+  return {
+    baseUrl: profile.bridgeConfig.baseUrl ?? baseUrlFromSecret,
+    serviceId: profile.bridgeConfig.serviceId ?? serviceIdFromSecret,
+    appKey: profile.bridgeConfig.appKey ?? appKeyFromSecret,
+    serviceKey,
+    serviceKeySecretRef,
+  };
+}
+
+function getBridgeSecretRefsForProfile(
+  agentKey: string,
+  bridgeConfig:
+    | {
+        enabled: boolean;
+        serviceKeySecretRef?: string;
+      }
+    | undefined,
+): Array<string> {
+  if (!bridgeConfig?.enabled) {
+    return [];
+  }
+  const refs: Array<string> = [
+    bridgeConfig.serviceKeySecretRef ?? `${BRIDGE_SECRET_REFS.serviceKey}.${agentKey}`,
+  ];
+  return refs;
+}
+
+function getScopedSecretRefCandidates(
+  agentKey: string,
+  globalPrefix: string,
+  preferredRef?: string | null,
+): Array<string> {
+  const refs: Array<string> = [];
+  if (preferredRef && preferredRef.trim().length > 0) {
+    refs.push(preferredRef.trim());
+  }
+  refs.push(`${globalPrefix}.${agentKey}`);
+  refs.push(globalPrefix);
+  return Array.from(new Set(refs));
+}
+
+async function resolveFirstActiveSecretValue(
+  ctx: any,
+  secretRefs: Array<string>,
+): Promise<[string | null, string | null]> {
+  for (const secretRef of secretRefs) {
+    const active = await ctx.db
+      .query("secrets")
+      .withIndex("by_secretRef_and_active", (q: any) =>
+        q.eq("secretRef", secretRef).eq("active", true),
+      )
+      .unique();
+    if (active) {
+      return [secretRef, decryptSecretValue(active.encryptedValue, active.algorithm)];
+    }
+  }
+  return [null, null];
+}
 
 function fingerprintConversationDelta(
   deltaContext: Array<{ role: "system" | "user" | "assistant" | "tool"; content: string; at: number }>,

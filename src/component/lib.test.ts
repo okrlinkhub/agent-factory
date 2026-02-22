@@ -146,6 +146,56 @@ describe("component lib", () => {
     expect(worker?.scheduledShutdownAt).toBe(now + 300_000);
   });
 
+  test("hydration bundle should include resolved agent-bridge runtime config", async () => {
+    const t = initConvexTest();
+    await t.mutation(api.queue.upsertAgentProfile, {
+      agentKey: "bridge-agent",
+      version: "1.0.0",
+      soulMd: "# Soul",
+      clientMd: "# Client",
+      skills: ["agent-bridge"],
+      secretsRef: [],
+      bridgeConfig: {
+        enabled: true,
+        baseUrl: "https://consumer.example.com",
+        serviceId: "openclaw-prod",
+        appKey: "crm",
+      },
+      enabled: true,
+    });
+    await t.mutation(api.queue.importPlaintextSecret, {
+      secretRef: "agent-bridge.serviceKey.bridge-agent",
+      plaintextValue: "abs_live_bridge_key",
+    });
+
+    const messageId = await t.mutation(api.lib.enqueue, {
+      conversationId: "bridge:chat:1",
+      agentKey: "bridge-agent",
+      payload: {
+        provider: "telegram",
+        providerUserId: "bridge-user",
+        messageText: "test",
+      },
+    });
+    const claim = await t.mutation(api.lib.claim, {
+      workerId: "worker-bridge-1",
+    });
+    expect(claim?.messageId).toBe(messageId);
+
+    const bundle = await t.query(api.lib.getHydrationBundle, {
+      messageId,
+      workspaceId: "default",
+    });
+    expect(bundle).not.toBeNull();
+    expect(bundle?.bridgeRuntimeConfig).toEqual({
+      baseUrl: "https://consumer.example.com",
+      serviceId: "openclaw-prod",
+      appKey: "crm",
+      serviceKey: "abs_live_bridge_key",
+      serviceKeySecretRef: "agent-bridge.serviceKey.bridge-agent",
+    });
+  });
+
   test("worker control state should signal stop for stopped worker", async () => {
     const t = initConvexTest();
     await t.mutation(internal.queue.upsertWorkerState, {

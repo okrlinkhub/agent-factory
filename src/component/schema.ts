@@ -9,6 +9,15 @@ export default defineSchema({
     clientMd: v.optional(v.string()),
     skills: v.array(v.string()),
     secretsRef: v.array(v.string()),
+    bridgeConfig: v.optional(
+      v.object({
+        enabled: v.boolean(),
+        baseUrl: v.optional(v.string()),
+        serviceId: v.optional(v.string()),
+        appKey: v.optional(v.string()),
+        serviceKeySecretRef: v.optional(v.string()),
+      }),
+    ),
     enabled: v.boolean(),
   })
     .index("by_agentKey", ["agentKey"])

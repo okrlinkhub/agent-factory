@@ -8,6 +8,16 @@ import type { Auth, HttpRouter } from "convex/server";
 import { v } from "convex/values";
 import type { ComponentApi } from "../component/_generated/component.js";
 import { scalingPolicyValidator } from "../component/config.js";
+export {
+  bridgeFunctionKeyFromToolName,
+  executeBridgeFunction,
+  isBridgeToolName,
+  maybeExecuteBridgeToolCall,
+  resolveBridgeRuntimeConfig,
+  type BridgeExecutionResult,
+  type HydratedBridgeRuntimeConfig,
+  type ResolvedBridgeRuntimeConfig,
+} from "./bridge.js";
 
 export function exposeApi(
   component: ComponentApi,

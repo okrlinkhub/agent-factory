@@ -56,7 +56,12 @@ Verify status:
 
 ```sh
 npx convex run example:secretStatus '{
-  "secretRefs": ["convex.url", "fly.apiToken", "telegram.botToken"]
+  "secretRefs": [
+    "convex.url",
+    "fly.apiToken",
+    "telegram.botToken",
+    "agent-bridge.serviceKey.default"
+  ]
 }'
 ```
 
@@ -142,6 +147,83 @@ If you use `exposeApi(...)`, the worker contract is available directly on the co
 - `workerHeartbeat`
 - `workerComplete`
 - `workerFail`
+
+### Native integration with `agent-bridge` (no consumer glue code)
+
+`agent-factory` now exposes a native contract for bridge execution. You only configure profile + secrets in the component.
+
+1) Configure an agent profile with bridge settings:
+
+```ts
+await ctx.runMutation(components.agentFactory.lib.configureAgent, {
+  agentKey: "default",
+  version: "1.0.0",
+  soulMd: "# Soul",
+  clientMd: "# Client",
+  skills: ["agent-bridge"],
+  secretsRef: [],
+  bridgeConfig: {
+    enabled: true,
+    baseUrl: "https://<your-consumer>.convex.site",
+    serviceId: "openclaw-prod",
+    appKey: "crm",
+  },
+  enabled: true,
+});
+```
+
+2) Import bridge service key in component secrets:
+
+```sh
+npx convex run example:importSecret '{
+  "secretRef": "agent-bridge.serviceKey.default",
+  "plaintextValue": "abs_live_XXXXXXXXXXXXXXXX"
+}'
+```
+
+Naming convention supported by hydration resolver:
+- per-agent service key: `agent-bridge.serviceKey.<agentKey>` (recommended)
+- global service key fallback: `agent-bridge.serviceKey`
+- optional profile override: `bridgeConfig.serviceKeySecretRef`
+- optional per-agent/global overrides for `baseUrl`, `serviceId`, `appKey` via:
+  - `agent-bridge.baseUrl.<agentKey>` / `agent-bridge.baseUrl`
+  - `agent-bridge.serviceId.<agentKey>` / `agent-bridge.serviceId`
+  - `agent-bridge.appKey.<agentKey>` / `agent-bridge.appKey`
+
+Hydration includes `bridgeRuntimeConfig` for the worker loop.
+
+3) In worker runtime use built-in helpers from this package:
+
+```ts
+import {
+  maybeExecuteBridgeToolCall,
+  resolveBridgeRuntimeConfig,
+} from "@okrlinkhub/agent-factory";
+
+const resolved = resolveBridgeRuntimeConfig(hydration.bridgeRuntimeConfig);
+if (resolved.ok) {
+  // Optional proactive resolution check
+}
+
+const toolResult = await maybeExecuteBridgeToolCall({
+  toolName: pendingToolCall.toolName,
+  toolArgs,
+  hydratedConfig: hydration.bridgeRuntimeConfig,
+  userToken: maybeUserJwtOrNull,
+});
+```
+
+`maybeExecuteBridgeToolCall` handles:
+- `bridge.<functionKey>` mapping to `POST /agent/execute`
+- strict headers (`X-Agent-Service-Id`, `X-Agent-Service-Key`, `X-Agent-App`)
+- retry for `429` and `5xx`
+- deterministic response object to map back into conversation/tool messages
+
+Fallback env (worker-side only, used when hydration misses values):
+- `OPENCLAW_AGENT_BRIDGE_BASE_URL` or `AGENT_BRIDGE_BASE_URL`
+- `OPENCLAW_SERVICE_ID` or `AGENT_BRIDGE_SERVICE_ID`
+- `OPENCLAW_SERVICE_KEY` or `AGENT_BRIDGE_SERVICE_KEY`
+- `OPENCLAW_AGENT_APP` / `OPENCLAW_APP_KEY` / `AGENT_BRIDGE_APP_KEY`
 
 ### HTTP Routes
 
