@@ -1,7 +1,10 @@
 {
   "name": "@okrlinkhub/agent-factory",
   "description": "A agent factory component for Convex.",
-  "repository": "github:okrlinkhub/agent-factory",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/okrlinkhub/agent-factory.git"
+  },
   "homepage": "https://github.com/okrlinkhub/agent-factory#readme",
   "bugs": {
     "url": "https://github.com/okrlinkhub/agent-factory/issues"
