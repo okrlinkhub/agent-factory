@@ -3,6 +3,7 @@ export {
   importPlaintextSecret as importSecret,
   getSecretsStatus as secretStatus,
   enqueueMessage as enqueue,
+  releaseStuckJobs,
   appendConversationMessages,
   generateMediaUploadUrl,
   getStorageFileUrl,
@@ -17,6 +18,7 @@ export {
 } from "./queue.js";
 
 export { reconcileWorkerPool as reconcileWorkers } from "./scheduler.js";
+export { deleteFlyVolumeManual as deleteFlyVolume } from "./providers/fly.js";
 
 export {
   bindUserAgent,

@@ -48,7 +48,6 @@ describe("example", () => {
       convexUrl: "https://acrobatic-bass-782.eu-west-1.convex.cloud",
       workspaceId: "default",
     });
-    expect(reconcile.desiredWorkers).toBe(0);
     expect(reconcile.activeWorkers).toBe(0);
     expect(reconcile.spawned).toBe(0);
     expect(reconcile.terminated).toBe(0);
@@ -175,6 +174,7 @@ describe("example", () => {
       messageId: claimed!.messageId,
       workspaceId: "default",
     });
+    expect(hydration).not.toHaveProperty("snapshot");
     expect(hydration?.conversationState.contextHistory.length).toBeGreaterThanOrEqual(2);
     const tail = hydration?.conversationState.contextHistory.slice(-2) ?? [];
     expect(tail[0]?.content).toBe("hello");

@@ -295,6 +295,40 @@ export function exposeApi(
         });
       },
     }),
+    deleteFlyVolume: actionGeneric({
+      args: {
+        appName: v.string(),
+        volumeId: v.string(),
+        flyApiToken: v.optional(v.string()),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runAction((component.lib as any).deleteFlyVolume, args);
+      },
+    }),
+    recoverQueue: actionGeneric({
+      args: {
+        nowMs: v.optional(v.number()),
+        releaseLimit: v.optional(v.number()),
+        workspaceId: v.optional(v.string()),
+        scalingPolicy: v.optional(scalingPolicyValidator),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        const released = await ctx.runMutation(component.lib.releaseStuckJobs, {
+          nowMs: args.nowMs,
+          limit: args.releaseLimit,
+        });
+        const reconcile = await ctx.runAction(component.lib.reconcileWorkers, {
+          workspaceId: args.workspaceId,
+          scalingPolicy: args.scalingPolicy,
+        });
+        return {
+          released,
+          reconcile,
+        };
+      },
+    }),
     bindUserAgent: mutationGeneric({
       args: {
         consumerUserId: v.string(),

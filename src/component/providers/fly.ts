@@ -1,3 +1,6 @@
+import { v } from "convex/values";
+import { action } from "../_generated/server.js";
+
 export type WorkerProviderStatus =
   | "active"
   | "stopped";
@@ -40,6 +43,7 @@ type FlyMachine = {
   config?: {
     image?: string;
     image_ref?: string;
+    mounts?: Array<FlyMachineMount>;
   };
 };
 
@@ -149,10 +153,43 @@ export class FlyMachinesProvider implements WorkerProvider {
   }
 
   async terminateWorker(appName: string, machineId: string): Promise<void> {
+    const volumeIds = await this.getMachineVolumeIds(appName, machineId);
     await this.request<void>({
       path: `/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(machineId)}`,
       method: "DELETE",
     });
+    for (const volumeId of volumeIds) {
+      try {
+        await this.request<void>({
+          path: `/apps/${encodeURIComponent(appName)}/volumes/${encodeURIComponent(volumeId)}`,
+          method: "DELETE",
+        });
+      } catch (error) {
+        if (isFlyNotFoundError(error)) {
+          continue;
+        }
+        throw error;
+      }
+    }
+  }
+
+  private async getMachineVolumeIds(appName: string, machineId: string): Promise<Array<string>> {
+    try {
+      const machine = await this.request<FlyMachine>({
+        path: `/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(machineId)}`,
+        method: "GET",
+      });
+      const mounts = machine.config?.mounts ?? [];
+      const uniqueVolumeIds = new Set(
+        mounts.map((mount) => mount.volume).filter((volumeId) => volumeId.length > 0),
+      );
+      return Array.from(uniqueVolumeIds);
+    } catch (error) {
+      if (isFlyNotFoundError(error)) {
+        return [];
+      }
+      throw error;
+    }
   }
 
   async cordonWorker(appName: string, machineId: string): Promise<void> {
@@ -198,6 +235,51 @@ export class FlyMachinesProvider implements WorkerProvider {
   }
 }
 
+export const deleteFlyVolumeManual = action({
+  args: {
+    appName: v.string(),
+    volumeId: v.string(),
+    flyApiToken: v.optional(v.string()),
+  },
+  returns: v.object({
+    ok: v.boolean(),
+    status: v.number(),
+    message: v.string(),
+  }),
+  handler: async (ctx, args) => {
+    void ctx;
+    const appName = args.appName.trim();
+    const volumeId = args.volumeId.trim();
+    if (appName.length === 0 || volumeId.length === 0) {
+      throw new Error("appName e volumeId sono obbligatori.");
+    }
+    const apiToken = args.flyApiToken?.trim();
+    if (!apiToken) {
+      throw new Error("flyApiToken mancante: passalo come argomento.");
+    }
+
+    const response = await fetch(
+      `https://api.machines.dev/v1/apps/${encodeURIComponent(appName)}/volumes/${encodeURIComponent(volumeId)}`,
+      {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${apiToken}`,
+        },
+      },
+    );
+    const body = await response.text();
+    if (!response.ok) {
+      throw new Error(`Delete volume fallita (${response.status}): ${body || "errore sconosciuto"}`);
+    }
+
+    return {
+      ok: true,
+      status: response.status,
+      message: body || "Volume eliminato.",
+    };
+  },
+});
+
 function mapFlyStateToProviderStatus(state: string | undefined): WorkerProviderStatus {
   switch (state) {
     case "created":
@@ -235,4 +317,11 @@ function stableHashBase36(input: string): string {
   }
   const unsigned = hash >>> 0;
   return unsigned.toString(36);
+}
+
+function isFlyNotFoundError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return /not found|unknown machine|does not exist/i.test(error.message);
 }

@@ -140,6 +140,8 @@ export const {
   importSecret,
   secretStatus,
   startWorkers,
+  deleteFlyVolume,
+  recoverQueue,
   bindUserAgent,
   revokeUserAgentBinding,
   myAgentKey,

@@ -290,6 +290,13 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         },
         Name
       >;
+      deleteFlyVolume: FunctionReference<
+        "action",
+        "internal",
+        { appName: string; flyApiToken?: string; volumeId: string },
+        { message: string; ok: boolean; status: number },
+        Name
+      >;
       enqueue: FunctionReference<
         "mutation",
         "internal",
@@ -363,22 +370,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             provider: string;
             providerUserId: string;
             rawUpdateJson?: string;
-          };
-          snapshot: null | {
-            compiledPromptStack: Array<{ content: string; section: string }>;
-            memoryWindow: Array<{ excerpt: string; path: string }>;
-            skillsBundle: Array<{
-              assets?: Array<{
-                assetPath: string;
-                assetType: "script" | "config" | "venv" | "other";
-                contentHash: string;
-                sizeBytes: number;
-              }>;
-              manifestMd: string;
-              skillKey: string;
-            }>;
-            snapshotId: string;
-            snapshotKey: string;
           };
           telegramBotToken: null | string;
         },
@@ -482,12 +473,14 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           };
           workspaceId?: string;
         },
-        {
-          activeWorkers: number;
-          desiredWorkers: number;
-          spawned: number;
-          terminated: number;
-        },
+        { activeWorkers: number; spawned: number; terminated: number },
+        Name
+      >;
+      releaseStuckJobs: FunctionReference<
+        "mutation",
+        "internal",
+        { limit?: number; nowMs?: number },
+        { requeued: number; unlocked: number },
         Name
       >;
       resolveAgentForTelegram: FunctionReference<
@@ -540,6 +533,17 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         },
         Name
       >;
+    };
+    providers: {
+      fly: {
+        deleteFlyVolumeManual: FunctionReference<
+          "action",
+          "internal",
+          { appName: string; flyApiToken?: string; volumeId: string },
+          { message: string; ok: boolean; status: number },
+          Name
+        >;
+      };
     };
     queue: {
       appendConversationMessages: FunctionReference<
@@ -693,22 +697,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             providerUserId: string;
             rawUpdateJson?: string;
           };
-          snapshot: null | {
-            compiledPromptStack: Array<{ content: string; section: string }>;
-            memoryWindow: Array<{ excerpt: string; path: string }>;
-            skillsBundle: Array<{
-              assets?: Array<{
-                assetPath: string;
-                assetType: "script" | "config" | "venv" | "other";
-                contentHash: string;
-                sizeBytes: number;
-              }>;
-              manifestMd: string;
-              skillKey: string;
-            }>;
-            snapshotId: string;
-            snapshotKey: string;
-          };
           telegramBotToken: null | string;
         },
         Name
@@ -846,6 +834,13 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         { expiresAt: number; snapshotId: string; uploadUrl: string },
         Name
       >;
+      releaseStuckJobs: FunctionReference<
+        "mutation",
+        "internal",
+        { limit?: number; nowMs?: number },
+        { requeued: number; unlocked: number },
+        Name
+      >;
       upsertAgentProfile: FunctionReference<
         "mutation",
         "internal",
@@ -890,12 +885,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           };
           workspaceId?: string;
         },
-        {
-          activeWorkers: number;
-          desiredWorkers: number;
-          spawned: number;
-          terminated: number;
-        },
+        { activeWorkers: number; spawned: number; terminated: number },
         Name
       >;
     };

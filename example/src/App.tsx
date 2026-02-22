@@ -11,6 +11,7 @@ function App() {
   const bindUserAgent = useMutation(api.example.bindUserAgent);
   const createPairingCode = useMutation(api.example.createPairingCode);
   const startWorkers = useAction(api.example.startWorkers);
+  const deleteFlyVolume = useAction(api.example.deleteFlyVolume);
   const stats = useQuery(api.example.queueStats, {});
   const workerStats = useQuery(api.example.workerStats, {});
   const users = useQuery(api.example.listExampleUsers, {});
@@ -33,12 +34,15 @@ function App() {
   const [secretResult, setSecretResult] = useState<string | null>(null);
   const [bindingResult, setBindingResult] = useState<string | null>(null);
   const [workersResult, setWorkersResult] = useState<string | null>(null);
+  const [deleteVolumeResult, setDeleteVolumeResult] = useState<string | null>(null);
   const [pairingResult, setPairingResult] = useState<string | null>(null);
   const [selectedUserId, setSelectedUserId] = useState("");
   const [bindingAgentKey, setBindingAgentKey] = useState("default");
   const [telegramBotUsername, setTelegramBotUsername] = useState("");
   const [telegramUserIdForBinding, setTelegramUserIdForBinding] = useState("");
   const [telegramChatIdForBinding, setTelegramChatIdForBinding] = useState("");
+  const [flyAppNameForDelete, setFlyAppNameForDelete] = useState("openclaw-okr-image");
+  const [flyVolumeIdForDelete, setFlyVolumeIdForDelete] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const convexUrl = import.meta.env.VITE_CONVEX_URL.replace(".cloud", ".site");
   const convexSecretStatus = (secretsStatus ?? []).find((item) => item.secretRef === "convex.url");
@@ -108,10 +112,30 @@ function App() {
         workspaceId: "default",
       });
       setWorkersResult(
-        `Workers desiderati: ${result.desiredWorkers}, attivi: ${result.activeWorkers}, spawned: ${result.spawned}, terminated: ${result.terminated}.`,
+        `Workers attivi: ${result.activeWorkers}, spawned: ${result.spawned}, terminated: ${result.terminated}.`,
       );
     } catch (error) {
       setWorkersResult((error as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const deleteOldFlyVolume = async () => {
+    setBusy("delete-volume");
+    setDeleteVolumeResult(null);
+    try {
+      const result = await deleteFlyVolume({
+        appName: flyAppNameForDelete,
+        volumeId: flyVolumeIdForDelete,
+        flyApiToken: flyApiToken.trim() || undefined,
+      });
+      setDeleteVolumeResult(
+        `Volume eliminato con successo. HTTP ${result.status}. ${result.message}`,
+      );
+      setFlyVolumeIdForDelete("");
+    } catch (error) {
+      setDeleteVolumeResult((error as Error).message);
     } finally {
       setBusy(null);
     }
@@ -461,6 +485,49 @@ function App() {
             <strong>{workerStats?.idleCount ?? 0}</strong>
           </p>
           {workersResult ? <p style={{ marginTop: "0.5rem" }}>{workersResult}</p> : null}
+        </div>
+        <div
+          style={{
+            marginBottom: "1rem",
+            padding: "1rem",
+            backgroundColor: "rgba(128, 128, 128, 0.1)",
+            borderRadius: "8px",
+          }}
+        >
+          <h3>4b) Delete old Fly volume</h3>
+          <p style={{ marginTop: 0, marginBottom: "0.75rem" }}>
+            Inserisci <code>appName</code> e <code>volumeId</code> per eliminare manualmente un
+            volume vecchio da Fly Machines API.
+          </p>
+          <div style={{ marginBottom: "0.75rem" }}>
+            <input
+              value={flyAppNameForDelete}
+              onChange={(event) => setFlyAppNameForDelete(event.target.value)}
+              placeholder="fly app name"
+              style={{ marginRight: "0.5rem", padding: "0.5rem", width: "35%" }}
+            />
+            <input
+              value={flyVolumeIdForDelete}
+              onChange={(event) => setFlyVolumeIdForDelete(event.target.value)}
+              placeholder="fly volume id"
+              style={{ marginRight: "0.5rem", padding: "0.5rem", width: "35%" }}
+            />
+            <button
+              onClick={deleteOldFlyVolume}
+              disabled={
+                busy !== null ||
+                flyAppNameForDelete.trim().length === 0 ||
+                flyVolumeIdForDelete.trim().length === 0 ||
+                flyApiToken.trim().length === 0
+              }
+            >
+              {busy === "delete-volume" ? "Deleting..." : "Delete volume"}
+            </button>
+          </div>
+          <p style={{ fontSize: "0.85rem", marginTop: 0, marginBottom: 0 }}>
+            Richiede <code>fly.apiToken</code> (usa il campo "Pairing Secrets" sopra).
+          </p>
+          {deleteVolumeResult ? <p style={{ marginTop: "0.5rem" }}>{deleteVolumeResult}</p> : null}
         </div>
         <div
           style={{

@@ -232,9 +232,7 @@ Core tables:
 - `workers`
 - `secrets`
 
-Hydration-optimized tables:
-- `workspaceDocuments`
-- `hydrationSnapshots`
+Hydration/runtime tables:
 - `conversationHydrationCache`
 - `dataSnapshots`
 
@@ -247,14 +245,13 @@ Hydration-optimized tables:
 - `agentSkills` and `skillAssets` removed from schema: skills must be baked into the OpenClaw worker image.
 - Worker control/snapshot APIs exposed for runtime loop (`workerControlState`, snapshot upload/finalize/fail, restore lookup).
 
-## OpenClaw workspace mapping
+## OpenClaw workspace persistence
 
-| OpenClaw source | Convex table |
+| OpenClaw source | Persistence layer |
 |---|---|
-| `AGENTS.md`, `SOUL.md`, `USER.md`, `IDENTITY.md`, `HEARTBEAT.md`, `TOOLS.md` | `workspaceDocuments` |
-| `memory/YYYY-MM-DD.md`, `MEMORY.md` | `workspaceDocuments` + `hydrationSnapshots.memoryWindow` |
+| `AGENTS.md`, `SOUL.md`, `USER.md`, `IDENTITY.md`, `HEARTBEAT.md`, `TOOLS.md` | worker filesystem backup (`/data/workspace`) |
+| `memory/YYYY-MM-DD.md`, `MEMORY.md` | worker filesystem backup (`/data/workspace`) |
 | Skills and related assets | bundled directly in worker image (`openclaw-okr-image`) |
-| Compiled hydration payload | `hydrationSnapshots` |
 | Conversation-specific deltas | `conversationHydrationCache` |
 
 ## Failure model
@@ -271,7 +268,6 @@ Hydration-optimized tables:
 - retry policy
 - lease policy
 - scaling policy
-- hydration policy
 - provider config
 
 ## Fly.io provider notes

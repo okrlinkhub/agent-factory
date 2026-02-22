@@ -105,7 +105,7 @@ describe("component lib", () => {
     expect(afterRevoke.agentKey).toBeNull();
   });
 
-  test("worker scheduling should set idle shutdown from completion time", async () => {
+  test("worker scheduling should set idle shutdown from last claim time", async () => {
     const t = initConvexTest();
     const now = Date.now();
     vi.setSystemTime(now);
@@ -143,7 +143,7 @@ describe("component lib", () => {
     const worker = workers.find((row: { workerId: string }) => row.workerId === "worker-2");
     expect(worker?.status).toBe("active");
     expect(worker?.load).toBe(0);
-    expect(worker?.scheduledShutdownAt).toBe(completionTime + 300_000);
+    expect(worker?.scheduledShutdownAt).toBe(now + 300_000);
   });
 
   test("worker control state should signal stop for stopped worker", async () => {
@@ -195,6 +195,7 @@ describe("component lib", () => {
     expect(worker?.status).toBe("stopped");
     expect(worker?.heartbeatAt).toBe(firstHeartbeat);
     expect(worker?.scheduledShutdownAt).toBe(stoppedAt);
+    expect(worker?.stoppedAt).toBe(stoppedAt);
   });
 
   test("scheduler caps desired workers by distinct ready conversations", async () => {
@@ -265,7 +266,9 @@ describe("component lib", () => {
         reconcileIntervalMs: 15_000,
       },
     });
-    expect(reconcile.desiredWorkers).toBe(1);
+    expect(reconcile.activeWorkers).toBe(3);
+    expect(reconcile.spawned).toBe(0);
+    expect(reconcile.terminated).toBe(0);
   });
 
   test("scheduler desired workers increases with distinct ready conversations", async () => {
@@ -346,6 +349,8 @@ describe("component lib", () => {
         volumeSizeGb: 10,
       },
     });
-    expect(reconcile.desiredWorkers).toBe(2);
+    expect(reconcile.activeWorkers).toBe(3);
+    expect(reconcile.spawned).toBe(0);
+    expect(reconcile.terminated).toBe(0);
   });
 });

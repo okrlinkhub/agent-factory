@@ -112,6 +112,7 @@ export default defineSchema({
     heartbeatAt: v.number(),
     lastClaimAt: v.optional(v.number()),
     scheduledShutdownAt: v.optional(v.number()),
+    stoppedAt: v.optional(v.number()),
     lastSnapshotId: v.optional(v.id("dataSnapshots")),
     capabilities: v.array(v.string()),
   })
@@ -194,84 +195,6 @@ export default defineSchema({
     .index("by_code", ["code"])
     .index("by_consumerUserId_and_status", ["consumerUserId", "status"])
     .index("by_expiresAt", ["expiresAt"]),
-
-  workspaceDocuments: defineTable({
-    workspaceId: v.string(),
-    docType: v.union(
-      v.literal("agents"),
-      v.literal("soul"),
-      v.literal("user"),
-      v.literal("identity"),
-      v.literal("heartbeat"),
-      v.literal("tools"),
-      v.literal("bootstrap"),
-      v.literal("memory_daily"),
-      v.literal("memory_longterm"),
-      v.literal("custom"),
-    ),
-    path: v.string(),
-    content: v.string(),
-    contentHash: v.string(),
-    version: v.number(),
-    updatedAt: v.number(),
-    isActive: v.boolean(),
-  })
-    .index("by_workspaceId_and_docType", ["workspaceId", "docType"])
-    .index("by_workspaceId_and_path", ["workspaceId", "path"])
-    .index("by_workspaceId_and_updatedAt", ["workspaceId", "updatedAt"]),
-
-  hydrationSnapshots: defineTable({
-    workspaceId: v.string(),
-    agentKey: v.string(),
-    snapshotKey: v.string(),
-    snapshotVersion: v.number(),
-    sourceFingerprint: v.string(),
-    compiledPromptStack: v.array(
-      v.object({
-        section: v.string(),
-        content: v.string(),
-      }),
-    ),
-    skillsBundle: v.array(
-      v.object({
-        skillKey: v.string(),
-        manifestMd: v.string(),
-        assets: v.optional(
-          v.array(
-            v.object({
-              assetPath: v.string(),
-              assetType: v.union(
-                v.literal("script"),
-                v.literal("config"),
-                v.literal("venv"),
-                v.literal("other"),
-              ),
-              contentHash: v.string(),
-              sizeBytes: v.number(),
-            }),
-          ),
-        ),
-      }),
-    ),
-    memoryWindow: v.array(
-      v.object({
-        path: v.string(),
-        excerpt: v.string(),
-      }),
-    ),
-    tokenEstimate: v.number(),
-    builtAt: v.number(),
-    expiresAt: v.number(),
-    status: v.union(
-      v.literal("ready"),
-      v.literal("stale"),
-      v.literal("building"),
-      v.literal("failed"),
-    ),
-  })
-    .index("by_agentKey_and_builtAt", ["agentKey", "builtAt"])
-    .index("by_snapshotKey", ["snapshotKey"])
-    .index("by_status_and_expiresAt", ["status", "expiresAt"]),
 
   conversationHydrationCache: defineTable({
     conversationId: v.string(),

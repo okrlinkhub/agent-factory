@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { api, internal } from "./_generated/api.js";
+import { internal } from "./_generated/api.js";
 import { action, internalAction } from "./_generated/server.js";
 import {
   DEFAULT_CONFIG,
@@ -19,7 +19,6 @@ const reconcileWorkerPoolArgs = {
 };
 
 const reconcileWorkerPoolReturns = v.object({
-  desiredWorkers: v.number(),
   activeWorkers: v.number(),
   spawned: v.number(),
   terminated: v.number(),
@@ -97,11 +96,6 @@ async function runReconcileWorkerPool(
   const workspaceId = args.workspaceId ?? "default";
   const provider = resolveProvider(providerConfig.kind, flyApiToken);
 
-  const queueStats: {
-    queuedReady: number;
-    processing: number;
-    deadLetter: number;
-  } = await ctx.runQuery(api.queue.getQueueStats, { nowMs });
   const readyConversationCount: number = await ctx.runQuery(
     (internal.queue as any).getReadyConversationCountForScheduler,
     { nowMs, limit: 1000 },
@@ -113,6 +107,7 @@ async function runReconcileWorkerPool(
     heartbeatAt: number;
     lastClaimAt: number | null;
     scheduledShutdownAt: number | null;
+    stoppedAt: number | null;
     machineId: string | null;
     appName: string | null;
     region: string | null;
@@ -156,7 +151,8 @@ async function runReconcileWorkerPool(
         status: "stopped",
         load: 0,
         nowMs,
-        scheduledShutdownAt: nowMs,
+        scheduledShutdownAt: worker.scheduledShutdownAt ?? undefined,
+        stoppedAt: nowMs,
         machineId: worker.machineId ?? undefined,
         appName: providerConfig.appName,
         region: providerConfig.region,
@@ -170,25 +166,13 @@ async function runReconcileWorkerPool(
   let spawned = 0;
   let terminated = staleWorkers.length;
 
-  const computedDesired = Math.ceil(
-    queueStats.queuedReady / Math.max(1, scaling.queuePerWorkerTarget),
-  );
   const dedicatedVolumeMode =
     providerConfig.volumeName.trim().length > 0 && providerConfig.volumePath.trim().length > 0;
-  const unconstrainedDesiredWorkers = clamp(
-    computedDesired,
-    scaling.minWorkers,
-    scaling.maxWorkers,
-  );
-  const conversationAwareCap = Math.max(scaling.minWorkers, readyConversationCount);
-  const conversationAwareDesiredWorkers = Math.min(
-    unconstrainedDesiredWorkers,
-    conversationAwareCap,
-  );
-  const desiredWorkers = dedicatedVolumeMode
-    ? Math.min(1, conversationAwareDesiredWorkers)
-    : conversationAwareDesiredWorkers;
-  if (dedicatedVolumeMode && conversationAwareDesiredWorkers > 1) {
+  const unconstrainedTargetWorkers = clamp(readyConversationCount, 0, scaling.maxWorkers);
+  const targetActiveWorkers = dedicatedVolumeMode
+    ? Math.min(1, unconstrainedTargetWorkers)
+    : unconstrainedTargetWorkers;
+  if (dedicatedVolumeMode && unconstrainedTargetWorkers > 1) {
     console.warn(
       `[scheduler] dedicated volume mode enabled for ${providerConfig.volumeName}; clamping desired workers to 1`,
     );
@@ -197,8 +181,8 @@ async function runReconcileWorkerPool(
     (worker) => worker.status === "active",
   ).length;
 
-  if (desiredWorkers > activeWorkers) {
-    const toSpawn = Math.min(scaling.spawnStep, desiredWorkers - activeWorkers);
+  if (targetActiveWorkers > activeWorkers) {
+    const toSpawn = Math.min(scaling.spawnStep, targetActiveWorkers - activeWorkers);
     for (let i = 0; i < toSpawn; i += 1) {
       const workerId = `afw-${nowMs}-${i}`;
       const created = await provider.spawnWorker({
@@ -224,6 +208,7 @@ async function runReconcileWorkerPool(
         load: 0,
         nowMs,
         scheduledShutdownAt: nowMs + scaling.idleTimeoutMs,
+        stoppedAt: undefined,
         machineId: created.machineId,
         appName: providerConfig.appName,
         region: created.region,
@@ -261,7 +246,8 @@ async function runReconcileWorkerPool(
       status: "stopped",
       load: 0,
       nowMs,
-      scheduledShutdownAt: nowMs,
+      scheduledShutdownAt: worker.scheduledShutdownAt ?? undefined,
+      stoppedAt: nowMs,
       machineId: machineId ?? undefined,
       appName: providerConfig.appName,
       region: providerConfig.region,
@@ -269,50 +255,14 @@ async function runReconcileWorkerPool(
     terminated += 1;
   }
 
-  if (desiredWorkers < activeWorkers) {
-    const toTerminate = Math.min(scaling.spawnStep, activeWorkers - desiredWorkers);
-    const idleFirst = workerRows
-      .filter((worker) => worker.status === "active" && worker.load === 0)
-      .sort((a, b) => a.heartbeatAt - b.heartbeatAt)
-      .slice(0, toTerminate);
-
-    for (const worker of idleFirst) {
-      const machineId = worker.machineId;
-      const machineIsLive = machineId ? liveMachineIds.has(machineId) : false;
-      const terminatedNow = await drainAndTerminateWorker({
-        provider,
-        appName: providerConfig.appName,
-        machineId,
-        machineIsLive,
-        workerId: worker.workerId,
-      });
-      if (!terminatedNow) {
-        // Keep worker active so the next reconcile can retry termination.
-        continue;
-      }
-      await ctx.runMutation(internal.queue.upsertWorkerState, {
-        workerId: worker.workerId,
-        provider: providerConfig.kind,
-        status: "stopped",
-        load: 0,
-        nowMs,
-        scheduledShutdownAt: nowMs,
-        machineId: machineId ?? undefined,
-        appName: providerConfig.appName,
-        region: providerConfig.region,
-      });
-      terminated += 1;
-    }
-  }
-
   await ctx.runMutation((internal.queue as any).expireOldDataSnapshots, {
     nowMs,
     limit: 100,
   });
 
+  const currentActiveWorkers = Math.max(0, activeWorkers + spawned - terminated);
   return {
-    desiredWorkers,
-    activeWorkers,
+    activeWorkers: currentActiveWorkers,
     spawned,
     terminated,
   };
@@ -348,33 +298,6 @@ async function drainAndTerminateWorker(input: {
     throw error;
   }
 }
-
-export const rebuildStaleHydrationSnapshots = internalAction({
-  args: {
-    nowMs: v.optional(v.number()),
-    limit: v.optional(v.number()),
-  },
-  returns: v.object({
-    rebuilt: v.number(),
-  }),
-  handler: async (ctx, args) => {
-    const targets: Array<{ workspaceId: string; agentKey: string }> =
-      await ctx.runQuery(internal.queue.listHydrationRebuildTargets, {
-      nowMs: args.nowMs,
-      limit: args.limit,
-    });
-    let rebuilt = 0;
-    for (const target of targets) {
-      await ctx.runMutation(internal.queue.prepareHydrationSnapshot, {
-        workspaceId: target.workspaceId,
-        agentKey: target.agentKey,
-        nowMs: args.nowMs,
-      });
-      rebuilt += 1;
-    }
-    return { rebuilt };
-  },
-});
 
 function resolveProvider(kind: string, flyApiToken: string): WorkerProvider {
   switch (kind) {

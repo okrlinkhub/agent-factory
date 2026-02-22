@@ -193,12 +193,16 @@ export const upsertAgentProfile = mutation({
   },
   returns: v.id("agentProfiles"),
   handler: async (ctx, args) => {
+    const defaultSecretsRef: Array<string> = ["convex.url", "fly.apiToken"];
     const existing = await ctx.db
       .query("agentProfiles")
       .withIndex("by_agentKey", (q) => q.eq("agentKey", args.agentKey))
       .unique();
     if (!existing) {
-      return await ctx.db.insert("agentProfiles", args);
+      const secretsRef = Array.from(
+        new Set([...args.secretsRef, ...defaultSecretsRef]),
+      );
+      return await ctx.db.insert("agentProfiles", { ...args, secretsRef });
     }
     await ctx.db.patch(existing._id, args);
     return existing._id;
@@ -409,6 +413,7 @@ export const claimNextJob = mutation({
           heartbeatAt: nowMs,
           lastClaimAt: nowMs,
           scheduledShutdownAt: undefined,
+          stoppedAt: undefined,
           capabilities: [],
         });
       } else {
@@ -418,6 +423,7 @@ export const claimNextJob = mutation({
           heartbeatAt: nowMs,
           lastClaimAt: nowMs,
           scheduledShutdownAt: undefined,
+          stoppedAt: undefined,
         });
       }
 
@@ -538,13 +544,15 @@ export const completeJob = mutation({
       .unique();
     if (worker) {
       const nextLoad = Math.max(0, worker.load - 1);
+      const shutdownBaseMs = worker.lastClaimAt ?? nowMs;
       await ctx.db.patch(worker._id, {
         load: nextLoad,
         heartbeatAt: nowMs,
         scheduledShutdownAt:
           nextLoad === 0
-            ? nowMs + DEFAULT_CONFIG.scaling.idleTimeoutMs
+            ? shutdownBaseMs + DEFAULT_CONFIG.scaling.idleTimeoutMs
             : undefined,
+        stoppedAt: undefined,
       });
     }
     return true;
@@ -624,13 +632,15 @@ export const failJob = mutation({
       .unique();
     if (worker) {
       const nextLoad = Math.max(0, worker.load - 1);
+      const shutdownBaseMs = worker.lastClaimAt ?? nowMs;
       await ctx.db.patch(worker._id, {
         load: nextLoad,
         heartbeatAt: nowMs,
         scheduledShutdownAt:
           nextLoad === 0
-            ? nowMs + DEFAULT_CONFIG.scaling.idleTimeoutMs
+            ? shutdownBaseMs + DEFAULT_CONFIG.scaling.idleTimeoutMs
             : undefined,
+        stoppedAt: undefined,
       });
     }
 
@@ -694,119 +704,55 @@ export const releaseExpiredLeases = internalMutation({
   },
 });
 
-export const prepareHydrationSnapshot = internalMutation({
+export const releaseStuckJobs = mutation({
   args: {
-    workspaceId: v.string(),
-    agentKey: v.string(),
     nowMs: v.optional(v.number()),
+    limit: v.optional(v.number()),
   },
   returns: v.object({
-    snapshotId: v.id("hydrationSnapshots"),
-    snapshotKey: v.string(),
-    reused: v.boolean(),
-    expiresAt: v.number(),
+    requeued: v.number(),
+    unlocked: v.number(),
   }),
   handler: async (ctx, args) => {
     const nowMs = args.nowMs ?? Date.now();
-    const snapshotKey = `${args.workspaceId}:${args.agentKey}`;
-    const agentProfile = await ctx.db
-      .query("agentProfiles")
-      .withIndex("by_agentKey", (q) => q.eq("agentKey", args.agentKey))
-      .unique();
-    if (!agentProfile) throw new Error(`Agent profile '${args.agentKey}' not found`);
+    const limit = args.limit ?? 100;
 
-    const docs = await ctx.db
-      .query("workspaceDocuments")
-      .withIndex("by_workspaceId_and_updatedAt", (q) => q.eq("workspaceId", args.workspaceId))
-      .order("desc")
-      .take(200);
+    const stuck = await ctx.db
+      .query("messageQueue")
+      .withIndex("by_status_and_leaseExpiresAt", (q) =>
+        q.eq("status", "processing").lte("leaseExpiresAt", nowMs),
+      )
+      .take(limit);
 
-    const secretFingerprints: Array<string> = [];
-    for (const ref of agentProfile.secretsRef) {
-      const activeSecret = await ctx.db
-        .query("secrets")
-        .withIndex("by_secretRef_and_active", (q) =>
-          q.eq("secretRef", ref).eq("active", true),
+    let requeued = 0;
+    let unlocked = 0;
+    for (const message of stuck) {
+      await ctx.db.patch(message._id, {
+        status: "queued",
+        scheduledFor: nowMs,
+        claimedBy: undefined,
+        leaseId: undefined,
+        leaseExpiresAt: undefined,
+        lastError: "Lease expired while processing",
+      });
+      requeued += 1;
+
+      const conversation = await ctx.db
+        .query("conversations")
+        .withIndex("by_conversationId", (q) =>
+          q.eq("conversationId", message.conversationId),
         )
         .unique();
-      if (activeSecret) {
-        secretFingerprints.push(`${activeSecret.secretRef}:${activeSecret.version}`);
+      if (
+        conversation?.processingLock &&
+        conversation.processingLock.claimedMessageId === message._id
+      ) {
+        await ctx.db.patch(conversation._id, { processingLock: undefined });
+        unlocked += 1;
       }
     }
 
-    const sourceFingerprint = [
-      agentProfile.version,
-      ...docs.map((doc) => `${doc.path}:${doc.contentHash}:${doc.version}`),
-      ...secretFingerprints,
-    ].join("|");
-
-    const existing = await ctx.db
-      .query("hydrationSnapshots")
-      .withIndex("by_snapshotKey", (q) => q.eq("snapshotKey", snapshotKey))
-      .first();
-
-    const expiresAt = nowMs + DEFAULT_CONFIG.hydration.snapshotTtlMs;
-    if (
-      existing &&
-      existing.sourceFingerprint === sourceFingerprint &&
-      existing.expiresAt > nowMs &&
-      existing.status === "ready"
-    ) {
-      return {
-        snapshotId: existing._id,
-        snapshotKey,
-        reused: true,
-        expiresAt: existing.expiresAt,
-      };
-    }
-
-    if (existing) {
-      await ctx.db.patch(existing._id, {
-        status: "stale",
-        expiresAt: nowMs,
-      });
-    }
-
-    const promptSections = docs
-      .filter((doc) => doc.isActive)
-      .sort((a, b) => a.path.localeCompare(b.path))
-      .map((doc) => ({
-        section: `${doc.docType}:${doc.path}`,
-        content: doc.content,
-      }));
-
-    const memoryWindow = docs
-      .filter(
-        (doc) =>
-          doc.docType === "memory_daily" || doc.docType === "memory_longterm",
-      )
-      .slice(0, 10)
-      .map((doc) => ({
-        path: doc.path,
-        excerpt: doc.content.slice(0, 2_000),
-      }));
-
-    const snapshotId = await ctx.db.insert("hydrationSnapshots", {
-      workspaceId: args.workspaceId,
-      agentKey: args.agentKey,
-      snapshotKey,
-      snapshotVersion: (existing?.snapshotVersion ?? 0) + 1,
-      sourceFingerprint,
-      compiledPromptStack: promptSections,
-      skillsBundle: [],
-      memoryWindow,
-      tokenEstimate: estimateTokens(promptSections, memoryWindow),
-      builtAt: nowMs,
-      expiresAt,
-      status: "ready",
-    });
-
-    return {
-      snapshotId,
-      snapshotKey,
-      reused: false,
-      expiresAt,
-    };
+    return { requeued, unlocked };
   },
 });
 
@@ -822,46 +768,6 @@ export const getHydrationBundleForClaimedJob = query({
       conversationId: v.string(),
       agentKey: v.string(),
       payload: queuePayloadValidator,
-      snapshot: v.union(
-        v.null(),
-        v.object({
-          snapshotId: v.id("hydrationSnapshots"),
-          snapshotKey: v.string(),
-          compiledPromptStack: v.array(
-            v.object({
-              section: v.string(),
-              content: v.string(),
-            }),
-          ),
-          skillsBundle: v.array(
-            v.object({
-              skillKey: v.string(),
-              manifestMd: v.string(),
-              assets: v.optional(
-                v.array(
-                  v.object({
-                    assetPath: v.string(),
-                    assetType: v.union(
-                      v.literal("script"),
-                      v.literal("config"),
-                      v.literal("venv"),
-                      v.literal("other"),
-                    ),
-                    contentHash: v.string(),
-                    sizeBytes: v.number(),
-                  }),
-                ),
-              ),
-            }),
-          ),
-          memoryWindow: v.array(
-            v.object({
-              path: v.string(),
-              excerpt: v.string(),
-            }),
-          ),
-        }),
-      ),
       conversationState: v.object({
         contextHistory: v.array(
           v.object({
@@ -908,10 +814,6 @@ export const getHydrationBundleForClaimedJob = query({
     if (!conversation || !profile) return null;
 
     const snapshotKey = `${args.workspaceId}:${message.agentKey}`;
-    const snapshot = await ctx.db
-      .query("hydrationSnapshots")
-      .withIndex("by_snapshotKey", (q) => q.eq("snapshotKey", snapshotKey))
-      .first();
     const conversationCache = await ctx.db
       .query("conversationHydrationCache")
       .withIndex("by_conversationId", (q) => q.eq("conversationId", message.conversationId))
@@ -944,15 +846,6 @@ export const getHydrationBundleForClaimedJob = query({
       conversationId: message.conversationId,
       agentKey: message.agentKey,
       payload: message.payload,
-      snapshot: snapshot
-        ? {
-            snapshotId: snapshot._id,
-            snapshotKey: snapshot.snapshotKey,
-            compiledPromptStack: snapshot.compiledPromptStack,
-            skillsBundle: snapshot.skillsBundle,
-            memoryWindow: snapshot.memoryWindow,
-          }
-        : null,
       conversationState: {
         contextHistory,
         pendingToolCalls: conversation.pendingToolCalls,
@@ -1095,6 +988,7 @@ export const upsertWorkerState = internalMutation({
     load: v.number(),
     nowMs: v.optional(v.number()),
     scheduledShutdownAt: v.optional(v.number()),
+    stoppedAt: v.optional(v.number()),
     machineId: v.optional(v.string()),
     appName: v.optional(v.string()),
     region: v.optional(v.string()),
@@ -1114,6 +1008,7 @@ export const upsertWorkerState = internalMutation({
         load: args.load,
         heartbeatAt: nowMs,
         scheduledShutdownAt: args.scheduledShutdownAt,
+        stoppedAt: args.status === "stopped" ? (args.stoppedAt ?? nowMs) : undefined,
         machineRef:
           args.machineId && args.appName
             ? {
@@ -1132,6 +1027,10 @@ export const upsertWorkerState = internalMutation({
       load: args.load,
       heartbeatAt: args.status === "active" ? nowMs : worker.heartbeatAt,
       scheduledShutdownAt: args.scheduledShutdownAt ?? worker.scheduledShutdownAt,
+      stoppedAt:
+        args.status === "active"
+          ? undefined
+          : (args.stoppedAt ?? worker.stoppedAt ?? nowMs),
       machineRef:
         args.machineId && args.appName
           ? {
@@ -1313,6 +1212,7 @@ export const listWorkersForScheduler = internalQuery({
       heartbeatAt: v.number(),
       lastClaimAt: v.union(v.null(), v.number()),
       scheduledShutdownAt: v.union(v.null(), v.number()),
+      stoppedAt: v.union(v.null(), v.number()),
       machineId: v.union(v.null(), v.string()),
       appName: v.union(v.null(), v.string()),
       region: v.union(v.null(), v.string()),
@@ -1327,6 +1227,7 @@ export const listWorkersForScheduler = internalQuery({
       heartbeatAt: worker.heartbeatAt,
       lastClaimAt: worker.lastClaimAt ?? null,
       scheduledShutdownAt: worker.scheduledShutdownAt ?? null,
+      stoppedAt: worker.stoppedAt ?? null,
       machineId: worker.machineRef?.machineId ?? null,
       appName: worker.machineRef?.appName ?? null,
       region: worker.machineRef?.region ?? null,
@@ -1398,59 +1299,6 @@ export const getWorkerStats = query({
     };
   },
 });
-
-export const listHydrationRebuildTargets = internalQuery({
-  args: {
-    nowMs: v.optional(v.number()),
-    limit: v.optional(v.number()),
-  },
-  returns: v.array(
-    v.object({
-      workspaceId: v.string(),
-      agentKey: v.string(),
-    }),
-  ),
-  handler: async (ctx, args) => {
-    const nowMs = args.nowMs ?? Date.now();
-    const limit = args.limit ?? 100;
-    const expiredReady = await ctx.db
-      .query("hydrationSnapshots")
-      .withIndex("by_status_and_expiresAt", (q) =>
-        q.eq("status", "ready").lte("expiresAt", nowMs),
-      )
-      .take(limit);
-
-    const stale = await ctx.db
-      .query("hydrationSnapshots")
-      .withIndex("by_status_and_expiresAt", (q) => q.eq("status", "stale"))
-      .take(limit);
-
-    const unique = new Map<string, { workspaceId: string; agentKey: string }>();
-    for (const row of [...expiredReady, ...stale]) {
-      const key = `${row.workspaceId}:${row.agentKey}`;
-      if (!unique.has(key)) {
-        unique.set(key, { workspaceId: row.workspaceId, agentKey: row.agentKey });
-      }
-      if (unique.size >= limit) break;
-    }
-    return [...unique.values()];
-  },
-});
-
-function estimateTokens(
-  promptSections: Array<{ section: string; content: string }>,
-  memoryWindow: Array<{ path: string; excerpt: string }>,
-): number {
-  const sectionChars = promptSections.reduce(
-    (sum, section) => sum + section.section.length + section.content.length,
-    0,
-  );
-  const memoryChars = memoryWindow.reduce(
-    (sum, memory) => sum + memory.path.length + memory.excerpt.length,
-    0,
-  );
-  return Math.ceil((sectionChars + memoryChars) / 4);
-}
 
 function fingerprintConversationDelta(
   deltaContext: Array<{ role: "system" | "user" | "assistant" | "tool"; content: string; at: number }>,
