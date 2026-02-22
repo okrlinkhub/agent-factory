@@ -117,7 +117,7 @@ Fly.io secrets diventa l'unica fonte per le API key LLM. Convex secrets resta so
 ### Modifiche
 
 - **[worker.mjs](openclaw-okr-image/worker.mjs)**: Rimuovere `resolveProviderApiKey()`, `providerEnv()`, `parseLlmPolicy()`, `buildProviderAttempts()`. Il worker non gestisce piu provider/model/key — e il gateway a farlo via env vars.
-- **[config.ts](agent-factory/src/component/config.ts)**: Rimuovere `openai.apiKey.*` dalla documentazione dei secretsRef. L'agentProfile non ha piu bisogno di referenziare le API key LLM.
+- **[config.ts](agent-factory/src/component/config.ts)**: Rimuovere `openai.apiKey.`* dalla documentazione dei secretsRef. L'agentProfile non ha piu bisogno di referenziare le API key LLM.
 - **Fly.io**: I secrets LLM sono impostati una volta con `fly secrets set` e ereditati da tutte le macchine automaticamente.
 
 ---
@@ -157,16 +157,23 @@ Il config reference di OpenClaw ([docs/providers/moonshot.md](https://github.com
 - **[entrypoint.sh](openclaw-okr-image/entrypoint.sh)**: Estendere la sezione di seeding di `openclaw.json` per includere il blocco `models.providers.moonshot` quando `MOONSHOT_API_KEY` e presente nell'env. Usare `OPENCLAW_AGENT_MODEL` per il modello primario (es. `moonshot/kimi-k2.5`).
 - **[worker.mjs](openclaw-okr-image/worker.mjs)**: Aggiornare `inferProviderFromModel()` per riconoscere `moonshot` e `kimi`. Aggiornare `providerEnv()` per mappare `moonshot` a `MOONSHOT_API_KEY` (serve solo fino a Fase 3 quando il CLI viene eliminato).
 - **Fly.io secrets**:
-  ```bash
+
+```bash
   fly secrets set \
     MOONSHOT_API_KEY="sk-..." \
     OPENCLAW_AGENT_MODEL="moonshot/kimi-k2.5" \
     -a agent-factory-workers
-  ```
+  
+
+```
+
 - **Fallback OpenAI**: OpenClaw supporta il model failover nativo. Se Kimi fallisce, il gateway puo cadere su OpenAI se `OPENAI_API_KEY` e presente nell'env. Configurabile nel blocco `agents.defaults.model`:
-  ```json5
+
+```json5
   { model: { primary: "moonshot/kimi-k2.5", fallback: "openai/gpt-4o-mini" } }
-  ```
+  
+
+```
 
 ---
 

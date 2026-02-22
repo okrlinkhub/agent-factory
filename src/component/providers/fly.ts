@@ -29,6 +29,7 @@ export interface WorkerProvider {
   listWorkers(appName: string): Promise<Array<ProviderWorker>>;
   terminateWorker(appName: string, machineId: string): Promise<void>;
   cordonWorker(appName: string, machineId: string): Promise<void>;
+  stopWorker(appName: string, machineId: string): Promise<void>;
 }
 
 type FlyMachine = {
@@ -161,6 +162,13 @@ export class FlyMachinesProvider implements WorkerProvider {
     });
   }
 
+  async stopWorker(appName: string, machineId: string): Promise<void> {
+    await this.request<void>({
+      path: `/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(machineId)}/stop`,
+      method: "POST",
+    });
+  }
+
   private async request<T>(input: {
     path: string;
     method: "GET" | "POST" | "DELETE";
@@ -179,10 +187,14 @@ export class FlyMachinesProvider implements WorkerProvider {
       throw new Error(`Fly API ${input.method} ${input.path} failed: ${text}`);
     }
 
-    if (input.method === "DELETE") {
+    if (input.method === "DELETE" || response.status === 204) {
       return undefined as T;
     }
-    return (await response.json()) as T;
+    const responseBody = await response.text();
+    if (!responseBody) {
+      return undefined as T;
+    }
+    return JSON.parse(responseBody) as T;
   }
 }
 

@@ -4,19 +4,19 @@ overview: Rendere robusta la terminazione worker Fly evitando errori `failed_pre
 todos:
   - id: provider-stop-method
     content: Aggiungere e implementare `stopWorker` nel provider Fly
-    status: pending
+    status: completed
   - id: scheduler-drain-flow
     content: Aggiornare il flusso di scale-down a `cordon -> stop -> terminate`
-    status: pending
+    status: completed
   - id: state-consistency
     content: Evitare aggiornamento a `stopped` quando la delete non è completata
-    status: pending
+    status: completed
   - id: error-handling
     content: Separare errori safe-idempotenti da errori retryabili (`failed_precondition`)
-    status: pending
+    status: completed
   - id: validate
     content: Controllare lints/typecheck e comportamento runtime via log
-    status: pending
+    status: completed
 isProject: false
 ---
 

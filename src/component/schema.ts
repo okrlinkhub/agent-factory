@@ -220,44 +220,6 @@ export default defineSchema({
     .index("by_workspaceId_and_path", ["workspaceId", "path"])
     .index("by_workspaceId_and_updatedAt", ["workspaceId", "updatedAt"]),
 
-  agentSkills: defineTable({
-    workspaceId: v.string(),
-    agentKey: v.string(),
-    skillKey: v.string(),
-    description: v.optional(v.string()),
-    manifestMd: v.string(),
-    entrypoints: v.array(
-      v.object({
-        kind: v.union(v.literal("script"), v.literal("command"), v.literal("api")),
-        value: v.string(),
-      }),
-    ),
-    requiredEnvRefs: v.array(v.string()),
-    tags: v.array(v.string()),
-    updatedAt: v.number(),
-    enabled: v.boolean(),
-  })
-    .index("by_agentKey_and_enabled", ["agentKey", "enabled"])
-    .index("by_workspaceId_and_skillKey", ["workspaceId", "skillKey"])
-    .index("by_workspaceId_and_updatedAt", ["workspaceId", "updatedAt"]),
-
-  skillAssets: defineTable({
-    workspaceId: v.string(),
-    skillKey: v.string(),
-    assetPath: v.string(),
-    assetType: v.union(
-      v.literal("script"),
-      v.literal("config"),
-      v.literal("venv"),
-      v.literal("other"),
-    ),
-    contentHash: v.string(),
-    sizeBytes: v.number(),
-    updatedAt: v.number(),
-  })
-    .index("by_workspaceId_and_skillKey", ["workspaceId", "skillKey"])
-    .index("by_workspaceId_and_assetPath", ["workspaceId", "assetPath"]),
-
   hydrationSnapshots: defineTable({
     workspaceId: v.string(),
     agentKey: v.string(),

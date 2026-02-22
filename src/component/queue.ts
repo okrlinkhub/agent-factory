@@ -482,7 +482,7 @@ export const heartbeatJob = mutation({
       .query("workers")
       .withIndex("by_workerId", (q) => q.eq("workerId", args.workerId))
       .unique();
-    if (worker) {
+    if (worker?.status === "active") {
       await ctx.db.patch(worker._id, { heartbeatAt: nowMs });
     }
 
@@ -721,45 +721,6 @@ export const prepareHydrationSnapshot = internalMutation({
       .order("desc")
       .take(200);
 
-    const skills = (
-      await ctx.db
-        .query("agentSkills")
-        .withIndex("by_agentKey_and_enabled", (q) =>
-          q.eq("agentKey", args.agentKey).eq("enabled", true),
-        )
-        .collect()
-    ).filter((skill) => skill.workspaceId === args.workspaceId);
-    const includeSkillAssets =
-      DEFAULT_CONFIG.hydration.skillAssetScanMode === "manifest_and_assets";
-    const assetsBySkill = new Map<
-      string,
-      Array<{
-        assetPath: string;
-        assetType: "script" | "config" | "venv" | "other";
-        contentHash: string;
-        sizeBytes: number;
-      }>
-    >();
-    if (includeSkillAssets) {
-      for (const skill of skills) {
-        const skillAssets = await ctx.db
-          .query("skillAssets")
-          .withIndex("by_workspaceId_and_skillKey", (q) =>
-            q.eq("workspaceId", args.workspaceId).eq("skillKey", skill.skillKey),
-          )
-          .collect();
-        assetsBySkill.set(
-          skill.skillKey,
-          skillAssets.map((asset) => ({
-            assetPath: asset.assetPath,
-            assetType: asset.assetType,
-            contentHash: asset.contentHash,
-            sizeBytes: asset.sizeBytes,
-          })),
-        );
-      }
-    }
-
     const secretFingerprints: Array<string> = [];
     for (const ref of agentProfile.secretsRef) {
       const activeSecret = await ctx.db
@@ -776,10 +737,6 @@ export const prepareHydrationSnapshot = internalMutation({
     const sourceFingerprint = [
       agentProfile.version,
       ...docs.map((doc) => `${doc.path}:${doc.contentHash}:${doc.version}`),
-      ...skills.map((skill) => `${skill.skillKey}:${skill.updatedAt}`),
-      ...[...assetsBySkill.entries()].flatMap(([skillKey, assets]) =>
-        assets.map((asset) => `${skillKey}:${asset.assetPath}:${asset.contentHash}`),
-      ),
       ...secretFingerprints,
     ].join("|");
 
@@ -836,11 +793,7 @@ export const prepareHydrationSnapshot = internalMutation({
       snapshotVersion: (existing?.snapshotVersion ?? 0) + 1,
       sourceFingerprint,
       compiledPromptStack: promptSections,
-      skillsBundle: skills.map((skill) => ({
-        skillKey: skill.skillKey,
-        manifestMd: skill.manifestMd,
-        assets: assetsBySkill.get(skill.skillKey),
-      })),
+      skillsBundle: [],
       memoryWindow,
       tokenEstimate: estimateTokens(promptSections, memoryWindow),
       builtAt: nowMs,
@@ -1177,7 +1130,7 @@ export const upsertWorkerState = internalMutation({
     await ctx.db.patch(worker._id, {
       status: args.status,
       load: args.load,
-      heartbeatAt: nowMs,
+      heartbeatAt: args.status === "active" ? nowMs : worker.heartbeatAt,
       scheduledShutdownAt: args.scheduledShutdownAt ?? worker.scheduledShutdownAt,
       machineRef:
         args.machineId && args.appName

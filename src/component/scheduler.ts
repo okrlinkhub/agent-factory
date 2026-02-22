@@ -244,15 +244,16 @@ async function runReconcileWorkerPool(
   for (const worker of dueIdleTimeout) {
     const machineId = worker.machineId;
     const machineIsLive = machineId ? liveMachineIds.has(machineId) : false;
-    if (machineId && machineIsLive) {
-      try {
-        await provider.cordonWorker(providerConfig.appName, machineId);
-        await provider.terminateWorker(providerConfig.appName, machineId);
-      } catch (error) {
-        if (!isSafeMissingMachineError(error)) {
-          throw error;
-        }
-      }
+    const terminatedNow = await drainAndTerminateWorker({
+      provider,
+      appName: providerConfig.appName,
+      machineId,
+      machineIsLive,
+      workerId: worker.workerId,
+    });
+    if (!terminatedNow) {
+      // Keep worker active so the next reconcile can retry termination.
+      continue;
     }
     await ctx.runMutation(internal.queue.upsertWorkerState, {
       workerId: worker.workerId,
@@ -278,15 +279,16 @@ async function runReconcileWorkerPool(
     for (const worker of idleFirst) {
       const machineId = worker.machineId;
       const machineIsLive = machineId ? liveMachineIds.has(machineId) : false;
-      if (machineId && machineIsLive) {
-        try {
-          await provider.cordonWorker(providerConfig.appName, machineId);
-          await provider.terminateWorker(providerConfig.appName, machineId);
-        } catch (error) {
-          if (!isSafeMissingMachineError(error)) {
-            throw error;
-          }
-        }
+      const terminatedNow = await drainAndTerminateWorker({
+        provider,
+        appName: providerConfig.appName,
+        machineId,
+        machineIsLive,
+        workerId: worker.workerId,
+      });
+      if (!terminatedNow) {
+        // Keep worker active so the next reconcile can retry termination.
+        continue;
       }
       await ctx.runMutation(internal.queue.upsertWorkerState, {
         workerId: worker.workerId,
@@ -314,6 +316,37 @@ async function runReconcileWorkerPool(
     spawned,
     terminated,
   };
+}
+
+async function drainAndTerminateWorker(input: {
+  provider: WorkerProvider;
+  appName: string;
+  machineId: string | null;
+  machineIsLive: boolean;
+  workerId: string;
+}): Promise<boolean> {
+  if (!input.machineId || !input.machineIsLive) {
+    return true;
+  }
+  try {
+    await input.provider.cordonWorker(input.appName, input.machineId);
+    await input.provider.stopWorker(input.appName, input.machineId);
+    await input.provider.terminateWorker(input.appName, input.machineId);
+    return true;
+  } catch (error) {
+    if (isSafeMissingMachineError(error)) {
+      return true;
+    }
+    if (isRetryableTerminatePreconditionError(error)) {
+      console.warn(
+        `[scheduler] worker ${input.workerId} termination deferred (precondition): ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return false;
+    }
+    throw error;
+  }
 }
 
 export const rebuildStaleHydrationSnapshots = internalAction({
@@ -359,4 +392,9 @@ function clamp(value: number, min: number, max: number): number {
 function isSafeMissingMachineError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /not found|unknown machine|does not exist|internal server error/i.test(message);
+}
+
+function isRetryableTerminatePreconditionError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /failed_precondition|unable to destroy machine|not currently stopped/i.test(message);
 }

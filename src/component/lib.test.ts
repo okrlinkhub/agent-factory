@@ -165,6 +165,38 @@ describe("component lib", () => {
     expect(controlUnknown.shouldStop).toBe(true);
   });
 
+  test("upsertWorkerState should preserve heartbeat for stopped workers", async () => {
+    const t = initConvexTest();
+    const firstHeartbeat = 1_700_000_000_000;
+    const stoppedAt = firstHeartbeat + 120_000;
+
+    await t.mutation(internal.queue.upsertWorkerState, {
+      workerId: "worker-heartbeat-1",
+      provider: "fly",
+      status: "active",
+      load: 0,
+      nowMs: firstHeartbeat,
+    });
+
+    await t.mutation(internal.queue.upsertWorkerState, {
+      workerId: "worker-heartbeat-1",
+      provider: "fly",
+      status: "stopped",
+      load: 0,
+      nowMs: stoppedAt,
+      scheduledShutdownAt: stoppedAt,
+    });
+
+    const workers = await t.query((internal.queue as any).listWorkersForScheduler, {});
+    const worker = workers.find(
+      (row: { workerId: string }) => row.workerId === "worker-heartbeat-1",
+    );
+
+    expect(worker?.status).toBe("stopped");
+    expect(worker?.heartbeatAt).toBe(firstHeartbeat);
+    expect(worker?.scheduledShutdownAt).toBe(stoppedAt);
+  });
+
   test("scheduler caps desired workers by distinct ready conversations", async () => {
     const t = initConvexTest();
     await t.mutation(api.queue.upsertAgentProfile, {

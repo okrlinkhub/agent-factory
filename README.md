@@ -124,7 +124,6 @@ This cron is a safety net. The primary path remains enqueue-triggered reconcile.
 
 ### LLM configuration (Fly env)
 
-LLM selection is intentionally **not stored in `agentProfiles`** anymore.
 The model/provider is controlled by Fly worker environment variables (for example `OPENCLAW_AGENT_MODEL`, `MOONSHOT_API_KEY`, `OPENAI_API_KEY`) and applied at runtime by the worker image bootstrap.
 
 Why:
@@ -235,8 +234,6 @@ Core tables:
 
 Hydration-optimized tables:
 - `workspaceDocuments`
-- `agentSkills`
-- `skillAssets`
 - `hydrationSnapshots`
 - `conversationHydrationCache`
 - `dataSnapshots`
@@ -247,7 +244,7 @@ Hydration-optimized tables:
 - Pre-stop drain protocol added: worker snapshots `/data` before termination and uploads archive metadata into `dataSnapshots`.
 - Restore on boot added: new workers can rehydrate from latest snapshot archive.
 - Hydration improved with `conversationHydrationCache` delta usage.
-- `skillAssets` now contributes to hydration snapshot and fingerprint rebuilds.
+- `agentSkills` and `skillAssets` removed from schema: skills must be baked into the OpenClaw worker image.
 - Worker control/snapshot APIs exposed for runtime loop (`workerControlState`, snapshot upload/finalize/fail, restore lookup).
 
 ## OpenClaw workspace mapping
@@ -256,8 +253,7 @@ Hydration-optimized tables:
 |---|---|
 | `AGENTS.md`, `SOUL.md`, `USER.md`, `IDENTITY.md`, `HEARTBEAT.md`, `TOOLS.md` | `workspaceDocuments` |
 | `memory/YYYY-MM-DD.md`, `MEMORY.md` | `workspaceDocuments` + `hydrationSnapshots.memoryWindow` |
-| `skills/*/SKILL.md` | `agentSkills` |
-| `skills/*/scripts/*`, `skills/*/config/*` metadata | `skillAssets` |
+| Skills and related assets | bundled directly in worker image (`openclaw-okr-image`) |
 | Compiled hydration payload | `hydrationSnapshots` |
 | Conversation-specific deltas | `conversationHydrationCache` |
 
@@ -286,15 +282,31 @@ The current provider implementation uses Fly Machines API endpoints for:
 - cordon machine
 - terminate machine
 
-### Worker image update procedure (local builder, no Depot)
+### Worker image setup (required first step for custom skills)
+
+Any new skill you want inside OpenClaw agents must be added to the worker image source repo:
+- https://github.com/okrlinkhub/openclaw-okr-image
+
+Fork this repository to maintain your own image with your custom skills/assets.
+
+First required flow:
+1) Take the image repo (fork/clone your own `openclaw-okr-image`).
+2) Build and deploy it on your own Fly app.
+   - Recommended build mode: remote Fly builder, `depot` disabled, `--remote-only`.
+3) Use the published image as reference in `src/component/config.ts` (`DEFAULT_WORKER_IMAGE` is the source of truth).
+4) Repeat the same process for every runtime/skills update.
+
+**Enterprise security model**: The worker image enforces a security policy where only skills explicitly included by the image maintainer are installed by default. Any other skills that may be present in the workspace are automatically removed on each worker startup. This ensures that only approved, vetted skills from the image source can execute within your OpenClaw agents.
+
+### Worker image update procedure
 
 When you update the worker runtime (for example in `openclaw-okr-image/worker.mjs`), use this flow to publish and roll out safely.
 
-1) Deploy with Fly local builder (explicitly disabling Depot):
+1) Deploy with remote Fly builder (explicitly disabling Depot):
 
 ```sh
 cd /path/to/openclaw-okr-image
-fly deploy --local-only --depot=false --yes
+fly deploy --remote-only --depot=false --yes
 ```
 
 2) If deployment fails with `CONVEX_URL not set`, set the secret and retry:
