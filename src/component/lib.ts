@@ -17,7 +17,10 @@ export {
   getWorkerStats as workerStats,
 } from "./queue.js";
 
-export { reconcileWorkerPool as reconcileWorkers } from "./scheduler.js";
+export {
+  reconcileWorkerPool as reconcileWorkers,
+  checkIdleShutdowns,
+} from "./scheduler.js";
 export { deleteFlyVolumeManual as deleteFlyVolume } from "./providers/fly.js";
 
 export {

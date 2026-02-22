@@ -165,6 +165,53 @@ describe("component lib", () => {
     expect(controlUnknown.shouldStop).toBe(true);
   });
 
+  test("scheduler count includes queued and in-progress conversations", async () => {
+    const t = initConvexTest();
+    await t.mutation(api.queue.upsertAgentProfile, {
+      agentKey: "support-agent",
+      version: "1.0.0",
+      soulMd: "# Soul",
+      clientMd: "# Client",
+      skills: ["agent-bridge"],
+      secretsRef: [],
+      enabled: true,
+    });
+
+    await t.mutation(api.queue.enqueueMessage, {
+      conversationId: "telegram:chat:active-1",
+      agentKey: "support-agent",
+      payload: {
+        provider: "telegram",
+        providerUserId: "u-active-1",
+        messageText: "uno",
+      },
+    });
+    await t.mutation(api.queue.enqueueMessage, {
+      conversationId: "telegram:chat:active-2",
+      agentKey: "support-agent",
+      payload: {
+        provider: "telegram",
+        providerUserId: "u-active-2",
+        messageText: "due",
+      },
+    });
+
+    const claimed = await t.mutation(api.lib.claim, { workerId: "worker-active-1" });
+    expect(claimed).not.toBeNull();
+
+    const readyCount = await t.query((internal.queue as any).getReadyConversationCountForScheduler, {
+      nowMs: Date.now(),
+      limit: 1000,
+    });
+    const activeCount = await t.query((internal.queue as any).getActiveConversationCountForScheduler, {
+      nowMs: Date.now(),
+      limit: 1000,
+    });
+
+    expect(readyCount).toBe(1);
+    expect(activeCount).toBe(2);
+  });
+
   test("upsertWorkerState should preserve heartbeat for stopped workers", async () => {
     const t = initConvexTest();
     const firstHeartbeat = 1_700_000_000_000;
@@ -258,7 +305,6 @@ describe("component lib", () => {
 
     const reconcile = await t.action(api.scheduler.reconcileWorkerPool, {
       scalingPolicy: {
-        minWorkers: 0,
         maxWorkers: 5,
         queuePerWorkerTarget: 1,
         spawnStep: 1,
@@ -331,7 +377,6 @@ describe("component lib", () => {
 
     const reconcile = await t.action(api.scheduler.reconcileWorkerPool, {
       scalingPolicy: {
-        minWorkers: 0,
         maxWorkers: 5,
         queuePerWorkerTarget: 1,
         spawnStep: 1,

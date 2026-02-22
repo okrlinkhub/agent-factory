@@ -17,11 +17,22 @@ const reconcileWorkerPoolArgs = {
   scalingPolicy: v.optional(scalingPolicyValidator),
   providerConfig: v.optional(providerConfigValidator),
 };
+const enforceIdleShutdownsArgs = {
+  flyApiToken: v.optional(v.string()),
+  nowMs: v.optional(v.number()),
+  providerConfig: v.optional(providerConfigValidator),
+};
 
 const reconcileWorkerPoolReturns = v.object({
   activeWorkers: v.number(),
   spawned: v.number(),
   terminated: v.number(),
+});
+const enforceIdleShutdownsReturns = v.object({
+  checked: v.number(),
+  stopped: v.number(),
+  pending: v.number(),
+  nextCheckScheduled: v.boolean(),
 });
 
 type ReconcileWorkerPoolArgs = {
@@ -66,6 +77,22 @@ export const reconcileWorkerPoolFromEnqueue = internalAction({
   },
 });
 
+export const enforceIdleShutdowns = internalAction({
+  args: enforceIdleShutdownsArgs,
+  returns: enforceIdleShutdownsReturns,
+  handler: async (ctx, args) => {
+    return await runEnforceIdleShutdowns(ctx, args);
+  },
+});
+
+export const checkIdleShutdowns = action({
+  args: enforceIdleShutdownsArgs,
+  returns: enforceIdleShutdownsReturns,
+  handler: async (ctx, args) => {
+    return await runEnforceIdleShutdowns(ctx, args);
+  },
+});
+
 async function runReconcileWorkerPool(
   ctx: any,
   args: ReconcileWorkerPoolArgs,
@@ -96,8 +123,8 @@ async function runReconcileWorkerPool(
   const workspaceId = args.workspaceId ?? "default";
   const provider = resolveProvider(providerConfig.kind, flyApiToken);
 
-  const readyConversationCount: number = await ctx.runQuery(
-    (internal.queue as any).getReadyConversationCountForScheduler,
+  const activeConversationCount: number = await ctx.runQuery(
+    (internal.queue as any).getActiveConversationCountForScheduler,
     { nowMs, limit: 1000 },
   );
   let workerRows: Array<{
@@ -168,7 +195,7 @@ async function runReconcileWorkerPool(
 
   const dedicatedVolumeMode =
     providerConfig.volumeName.trim().length > 0 && providerConfig.volumePath.trim().length > 0;
-  const unconstrainedTargetWorkers = clamp(readyConversationCount, 0, scaling.maxWorkers);
+  const unconstrainedTargetWorkers = clamp(activeConversationCount, 0, scaling.maxWorkers);
   const targetActiveWorkers = dedicatedVolumeMode
     ? Math.min(1, unconstrainedTargetWorkers)
     : unconstrainedTargetWorkers;
@@ -265,6 +292,102 @@ async function runReconcileWorkerPool(
     activeWorkers: currentActiveWorkers,
     spawned,
     terminated,
+  };
+}
+
+async function runEnforceIdleShutdowns(
+  ctx: any,
+  args: {
+    flyApiToken?: string;
+    nowMs?: number;
+    providerConfig?: typeof DEFAULT_CONFIG.provider;
+  },
+) {
+  const nowMs = args.nowMs ?? Date.now();
+  const providerConfig = args.providerConfig ?? DEFAULT_CONFIG.provider;
+  const flyApiToken =
+    args.flyApiToken ??
+    (await ctx.runQuery(internal.queue.getActiveSecretPlaintext, {
+      secretRef: "fly.apiToken",
+    }));
+  if (!flyApiToken) {
+    throw new Error(
+      "Missing Fly API token. Import an active 'fly.apiToken' secret or pass flyApiToken explicitly.",
+    );
+  }
+  const provider = resolveProvider(providerConfig.kind, flyApiToken);
+  const workerRows: Array<{
+    workerId: string;
+    status: "active" | "stopped";
+    load: number;
+    scheduledShutdownAt: number | null;
+    machineId: string | null;
+  }> = await ctx.runQuery((internal.queue as any).listWorkersForScheduler, {});
+
+  const dueIdleTimeout = workerRows
+    .filter(
+      (worker) =>
+        worker.status === "active" &&
+        worker.load === 0 &&
+        worker.scheduledShutdownAt !== null &&
+        worker.scheduledShutdownAt <= nowMs,
+    )
+    .sort((a, b) => (a.scheduledShutdownAt ?? 0) - (b.scheduledShutdownAt ?? 0));
+
+  if (dueIdleTimeout.length === 0) {
+    return {
+      checked: 0,
+      stopped: 0,
+      pending: 0,
+      nextCheckScheduled: false,
+    };
+  }
+
+  const providerWorkers = await provider.listWorkers(providerConfig.appName);
+  const liveMachineIds = new Set(providerWorkers.map((worker) => worker.machineId));
+
+  let stopped = 0;
+  let pending = 0;
+  for (const worker of dueIdleTimeout) {
+    const machineId = worker.machineId;
+    const machineIsLive = machineId ? liveMachineIds.has(machineId) : false;
+    const terminatedNow = await drainAndTerminateWorker({
+      provider,
+      appName: providerConfig.appName,
+      machineId,
+      machineIsLive,
+      workerId: worker.workerId,
+    });
+    if (!terminatedNow) {
+      pending += 1;
+      continue;
+    }
+    await ctx.runMutation(internal.queue.upsertWorkerState, {
+      workerId: worker.workerId,
+      provider: providerConfig.kind,
+      status: "stopped",
+      load: 0,
+      nowMs,
+      scheduledShutdownAt: worker.scheduledShutdownAt ?? undefined,
+      stoppedAt: nowMs,
+      machineId: machineId ?? undefined,
+      appName: providerConfig.appName,
+      region: providerConfig.region,
+    });
+    stopped += 1;
+  }
+
+  if (pending > 0) {
+    await ctx.scheduler.runAfter(60_000, (internal.scheduler as any).enforceIdleShutdowns, {
+      providerConfig,
+    });
+  }
+
+  return {
+    checked: dueIdleTimeout.length,
+    stopped,
+    pending,
+    nextCheckScheduled: pending > 0,
   };
 }
 

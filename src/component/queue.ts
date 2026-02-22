@@ -194,17 +194,17 @@ export const upsertAgentProfile = mutation({
   returns: v.id("agentProfiles"),
   handler: async (ctx, args) => {
     const defaultSecretsRef: Array<string> = ["convex.url", "fly.apiToken"];
+    const secretsRef = Array.from(
+      new Set([...args.secretsRef, ...defaultSecretsRef]),
+    );
     const existing = await ctx.db
       .query("agentProfiles")
       .withIndex("by_agentKey", (q) => q.eq("agentKey", args.agentKey))
       .unique();
     if (!existing) {
-      const secretsRef = Array.from(
-        new Set([...args.secretsRef, ...defaultSecretsRef]),
-      );
       return await ctx.db.insert("agentProfiles", { ...args, secretsRef });
     }
-    await ctx.db.patch(existing._id, args);
+    await ctx.db.patch(existing._id, { ...args, secretsRef });
     return existing._id;
   },
 });
@@ -545,15 +545,32 @@ export const completeJob = mutation({
     if (worker) {
       const nextLoad = Math.max(0, worker.load - 1);
       const shutdownBaseMs = worker.lastClaimAt ?? nowMs;
+      const nextScheduledShutdownAt =
+        nextLoad === 0
+          ? shutdownBaseMs + DEFAULT_CONFIG.scaling.idleTimeoutMs
+          : undefined;
       await ctx.db.patch(worker._id, {
         load: nextLoad,
         heartbeatAt: nowMs,
-        scheduledShutdownAt:
-          nextLoad === 0
-            ? shutdownBaseMs + DEFAULT_CONFIG.scaling.idleTimeoutMs
-            : undefined,
+        scheduledShutdownAt: nextScheduledShutdownAt,
         stoppedAt: undefined,
       });
+      if (nextScheduledShutdownAt !== undefined) {
+        const delayMs = Math.max(0, nextScheduledShutdownAt - nowMs) + 1_000;
+        try {
+          await ctx.scheduler.runAfter(
+            delayMs,
+            (internal.scheduler as any).enforceIdleShutdowns,
+            {},
+          );
+        } catch (error) {
+          console.warn(
+            `[queue] failed to schedule idle-shutdown watchdog: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }
     }
     return true;
   },
@@ -633,15 +650,32 @@ export const failJob = mutation({
     if (worker) {
       const nextLoad = Math.max(0, worker.load - 1);
       const shutdownBaseMs = worker.lastClaimAt ?? nowMs;
+      const nextScheduledShutdownAt =
+        nextLoad === 0
+          ? shutdownBaseMs + DEFAULT_CONFIG.scaling.idleTimeoutMs
+          : undefined;
       await ctx.db.patch(worker._id, {
         load: nextLoad,
         heartbeatAt: nowMs,
-        scheduledShutdownAt:
-          nextLoad === 0
-            ? shutdownBaseMs + DEFAULT_CONFIG.scaling.idleTimeoutMs
-            : undefined,
+        scheduledShutdownAt: nextScheduledShutdownAt,
         stoppedAt: undefined,
       });
+      if (nextScheduledShutdownAt !== undefined) {
+        const delayMs = Math.max(0, nextScheduledShutdownAt - nowMs) + 1_000;
+        try {
+          await ctx.scheduler.runAfter(
+            delayMs,
+            (internal.scheduler as any).enforceIdleShutdowns,
+            {},
+          );
+        } catch (error) {
+          console.warn(
+            `[queue] failed to schedule idle-shutdown watchdog: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }
     }
 
     return {
@@ -934,6 +968,39 @@ export const getReadyConversationCountForScheduler = internalQuery({
       }
     }
     return readyConversations;
+  },
+});
+
+export const getActiveConversationCountForScheduler = internalQuery({
+  args: {
+    nowMs: v.optional(v.number()),
+    limit: v.optional(v.number()),
+  },
+  returns: v.number(),
+  handler: async (ctx, args) => {
+    const nowMs = args.nowMs ?? Date.now();
+    const limit = Math.max(1, args.limit ?? 1000);
+    const queuedJobs = await ctx.db
+      .query("messageQueue")
+      .withIndex("by_status_and_scheduledFor", (q) =>
+        q.eq("status", "queued").lte("scheduledFor", nowMs),
+      )
+      .take(limit);
+    const processingJobs = await ctx.db
+      .query("messageQueue")
+      .withIndex("by_status_and_leaseExpiresAt", (q) =>
+        q.eq("status", "processing").gt("leaseExpiresAt", nowMs),
+      )
+      .take(limit);
+
+    const conversationIds = new Set<string>();
+    for (const job of queuedJobs) {
+      conversationIds.add(job.conversationId);
+    }
+    for (const job of processingJobs) {
+      conversationIds.add(job.conversationId);
+    }
+    return conversationIds.size;
   },
 });
 

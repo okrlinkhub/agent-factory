@@ -140,6 +140,7 @@ export const {
   importSecret,
   secretStatus,
   startWorkers,
+  checkIdleShutdowns,
   deleteFlyVolume,
   recoverQueue,
   bindUserAgent,

@@ -23,7 +23,6 @@ export type LeasePolicy = {
 };
 
 export type ScalingPolicy = {
-  minWorkers: number;
   maxWorkers: number;
   queuePerWorkerTarget: number;
   spawnStep: number;
@@ -101,7 +100,6 @@ export const leasePolicyValidator = v.object({
 });
 
 export const scalingPolicyValidator = v.object({
-  minWorkers: v.number(),
   maxWorkers: v.number(),
   queuePerWorkerTarget: v.number(),
   spawnStep: v.number(),
@@ -159,7 +157,6 @@ export const DEFAULT_CONFIG: AgentFactoryConfig = {
     staleAfterMs: 420_000,
   },
   scaling: {
-    minWorkers: 0,
     maxWorkers: 1,
     queuePerWorkerTarget: 5,
     spawnStep: 1,

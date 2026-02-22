@@ -295,6 +295,17 @@ export function exposeApi(
         });
       },
     }),
+    checkIdleShutdowns: actionGeneric({
+      args: {
+        flyApiToken: v.optional(v.string()),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runAction((component.lib as any).checkIdleShutdowns, {
+          flyApiToken: args.flyApiToken,
+        });
+      },
+    }),
     deleteFlyVolume: actionGeneric({
       args: {
         appName: v.string(),

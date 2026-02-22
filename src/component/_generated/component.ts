@@ -198,6 +198,31 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         },
         Name
       >;
+      checkIdleShutdowns: FunctionReference<
+        "action",
+        "internal",
+        {
+          flyApiToken?: string;
+          nowMs?: number;
+          providerConfig?: {
+            appName: string;
+            image: string;
+            kind: "fly" | "runpod" | "ecs";
+            organizationSlug: string;
+            region: string;
+            volumeName: string;
+            volumePath: string;
+            volumeSizeGb: number;
+          };
+        },
+        {
+          checked: number;
+          nextCheckScheduled: boolean;
+          pending: number;
+          stopped: number;
+        },
+        Name
+      >;
       claim: FunctionReference<
         "mutation",
         "internal",
@@ -466,7 +491,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           scalingPolicy?: {
             idleTimeoutMs: number;
             maxWorkers: number;
-            minWorkers: number;
             queuePerWorkerTarget: number;
             reconcileIntervalMs: number;
             spawnStep: number;
@@ -858,6 +882,31 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       >;
     };
     scheduler: {
+      checkIdleShutdowns: FunctionReference<
+        "action",
+        "internal",
+        {
+          flyApiToken?: string;
+          nowMs?: number;
+          providerConfig?: {
+            appName: string;
+            image: string;
+            kind: "fly" | "runpod" | "ecs";
+            organizationSlug: string;
+            region: string;
+            volumeName: string;
+            volumePath: string;
+            volumeSizeGb: number;
+          };
+        },
+        {
+          checked: number;
+          nextCheckScheduled: boolean;
+          pending: number;
+          stopped: number;
+        },
+        Name
+      >;
       reconcileWorkerPool: FunctionReference<
         "action",
         "internal",
@@ -878,7 +927,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           scalingPolicy?: {
             idleTimeoutMs: number;
             maxWorkers: number;
-            minWorkers: number;
             queuePerWorkerTarget: number;
             reconcileIntervalMs: number;
             spawnStep: number;

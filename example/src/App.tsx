@@ -11,6 +11,7 @@ function App() {
   const bindUserAgent = useMutation(api.example.bindUserAgent);
   const createPairingCode = useMutation(api.example.createPairingCode);
   const startWorkers = useAction(api.example.startWorkers);
+  const checkIdleShutdowns = useAction(api.example.checkIdleShutdowns);
   const deleteFlyVolume = useAction(api.example.deleteFlyVolume);
   const stats = useQuery(api.example.queueStats, {});
   const workerStats = useQuery(api.example.workerStats, {});
@@ -34,6 +35,7 @@ function App() {
   const [secretResult, setSecretResult] = useState<string | null>(null);
   const [bindingResult, setBindingResult] = useState<string | null>(null);
   const [workersResult, setWorkersResult] = useState<string | null>(null);
+  const [idleShutdownResult, setIdleShutdownResult] = useState<string | null>(null);
   const [deleteVolumeResult, setDeleteVolumeResult] = useState<string | null>(null);
   const [pairingResult, setPairingResult] = useState<string | null>(null);
   const [selectedUserId, setSelectedUserId] = useState("");
@@ -136,6 +138,23 @@ function App() {
       setFlyVolumeIdForDelete("");
     } catch (error) {
       setDeleteVolumeResult((error as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const runIdleShutdownCheck = async () => {
+    setBusy("idle-shutdown-check");
+    setIdleShutdownResult(null);
+    try {
+      const result = await checkIdleShutdowns({
+        flyApiToken: flyApiToken.trim() || undefined,
+      });
+      setIdleShutdownResult(
+        `Check completato: checked=${result.checked}, stopped=${result.stopped}, pending=${result.pending}, nextCheckScheduled=${result.nextCheckScheduled}.`,
+      );
+    } catch (error) {
+      setIdleShutdownResult((error as Error).message);
     } finally {
       setBusy(null);
     }
@@ -485,6 +504,29 @@ function App() {
             <strong>{workerStats?.idleCount ?? 0}</strong>
           </p>
           {workersResult ? <p style={{ marginTop: "0.5rem" }}>{workersResult}</p> : null}
+        </div>
+        <div
+          style={{
+            marginBottom: "1rem",
+            padding: "1rem",
+            backgroundColor: "rgba(128, 128, 128, 0.1)",
+            borderRadius: "8px",
+          }}
+        >
+          <h3>4a) Check idle shutdowns (no spawn)</h3>
+          <p style={{ marginTop: 0, marginBottom: "0.75rem" }}>
+            Esegue un check manuale dei worker <code>active</code> con{" "}
+            <code>scheduledShutdownAt</code> scaduto. Non crea nuove macchine.
+          </p>
+          <button onClick={runIdleShutdownCheck} disabled={busy !== null}>
+            {busy === "idle-shutdown-check" ? "Checking..." : "Check idle shutdowns now"}
+          </button>
+          <p style={{ fontSize: "0.85rem", marginTop: "0.75rem", marginBottom: 0 }}>
+            Usa <code>fly.apiToken</code> dal secret store, oppure il token inserito sopra.
+          </p>
+          {idleShutdownResult ? (
+            <p style={{ marginTop: "0.5rem" }}>{idleShutdownResult}</p>
+          ) : null}
         </div>
         <div
           style={{
