@@ -1,5 +1,6 @@
 import { v } from "convex/values";
-import { mutation, query } from "./_generated/server.js";
+import { internal } from "./_generated/api.js";
+import { action, mutation, query } from "./_generated/server.js";
 import type { MutationCtx } from "./_generated/server.js";
 
 const bindingStatusValidator = v.union(v.literal("active"), v.literal("revoked"));
@@ -38,6 +39,17 @@ const pairingCodeViewValidator = v.object({
   telegramChatId: v.union(v.null(), v.string()),
 });
 
+const telegramWebhookStatusValidator = v.object({
+  ok: v.boolean(),
+  webhookUrl: v.string(),
+  currentUrl: v.union(v.null(), v.string()),
+  isReady: v.boolean(),
+  pendingUpdateCount: v.number(),
+  lastErrorMessage: v.union(v.null(), v.string()),
+  lastErrorDate: v.union(v.null(), v.number()),
+  description: v.string(),
+});
+
 type BindingSource = "manual" | "telegram_pairing" | "api";
 
 type UpsertBindingArgs = {
@@ -49,6 +61,106 @@ type UpsertBindingArgs = {
   metadata?: Record<string, string>;
   nowMs?: number;
 };
+
+export const configureTelegramWebhook = action({
+  args: {
+    convexSiteUrl: v.string(),
+    secretRef: v.optional(v.string()),
+  },
+  returns: telegramWebhookStatusValidator,
+  handler: async (ctx, args) => {
+    const secretRef = args.secretRef?.trim() || "telegram.botToken.default";
+    const token = await ctx.runQuery(internal.queue.getActiveSecretPlaintext, {
+      secretRef,
+    });
+    if (!token) {
+      throw new Error(
+        `Missing Telegram token. Import an active '${secretRef}' secret before pairing.`,
+      );
+    }
+
+    const rawSiteUrl = args.convexSiteUrl.trim();
+    if (!rawSiteUrl) {
+      throw new Error("convexSiteUrl is required.");
+    }
+
+    const normalizedSiteUrl = rawSiteUrl
+      .replace(/\/+$/, "")
+      .replace(/\.cloud$/i, ".site");
+    if (!normalizedSiteUrl.startsWith("https://")) {
+      throw new Error("convexSiteUrl must start with https://");
+    }
+
+    const webhookUrl = `${normalizedSiteUrl}/agent-factory/telegram/webhook`;
+    const telegramApiBaseUrl = `https://api.telegram.org/bot${encodeURIComponent(token)}`;
+
+    const setWebhookResponse = await fetch(`${telegramApiBaseUrl}/setWebhook`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        url: webhookUrl,
+      }),
+    });
+
+    const setWebhookPayload = (await setWebhookResponse.json().catch(() => ({}))) as {
+      ok?: boolean;
+      description?: string;
+    };
+
+    if (!setWebhookResponse.ok || setWebhookPayload.ok !== true) {
+      const description =
+        typeof setWebhookPayload.description === "string"
+          ? setWebhookPayload.description
+          : "setWebhook failed";
+      throw new Error(`Telegram setWebhook failed: ${description}`);
+    }
+
+    const webhookInfoResponse = await fetch(`${telegramApiBaseUrl}/getWebhookInfo`);
+    const webhookInfoPayload = (await webhookInfoResponse.json().catch(() => ({}))) as {
+      ok?: boolean;
+      description?: string;
+      result?: {
+        url?: string;
+        pending_update_count?: number;
+        last_error_message?: string;
+        last_error_date?: number;
+      };
+    };
+
+    if (!webhookInfoResponse.ok || webhookInfoPayload.ok !== true) {
+      const description =
+        typeof webhookInfoPayload.description === "string"
+          ? webhookInfoPayload.description
+          : "getWebhookInfo failed";
+      throw new Error(`Telegram getWebhookInfo failed: ${description}`);
+    }
+
+    const currentUrl = typeof webhookInfoPayload.result?.url === "string"
+      ? webhookInfoPayload.result.url
+      : null;
+    const pendingUpdateCount = Number(webhookInfoPayload.result?.pending_update_count ?? 0);
+    const lastErrorMessage = typeof webhookInfoPayload.result?.last_error_message === "string"
+      ? webhookInfoPayload.result.last_error_message
+      : null;
+    const lastErrorDate = typeof webhookInfoPayload.result?.last_error_date === "number"
+      ? webhookInfoPayload.result.last_error_date
+      : null;
+    const isReady = currentUrl === webhookUrl;
+
+    return {
+      ok: true,
+      webhookUrl,
+      currentUrl,
+      isReady,
+      pendingUpdateCount,
+      lastErrorMessage,
+      lastErrorDate,
+      description: "Telegram webhook configured and verified.",
+    };
+  },
+});
 
 export const createPairingCode = mutation({
   args: {

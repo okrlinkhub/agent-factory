@@ -29,6 +29,7 @@ export {
   resolveAgentForUser,
   resolveAgentForTelegram,
   getUserAgentBinding,
+  configureTelegramWebhook,
   createPairingCode,
   consumePairingCode,
   getPairingCodeStatus,

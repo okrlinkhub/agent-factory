@@ -437,6 +437,16 @@ export function exposeApi(
         return await ctx.runQuery(component.lib.getPairingCodeStatus, args);
       },
     }),
+    configureTelegramWebhook: actionGeneric({
+      args: {
+        convexSiteUrl: v.string(),
+        secretRef: v.optional(v.string()),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runAction(component.lib.configureTelegramWebhook, args);
+      },
+    }),
   };
 }
 

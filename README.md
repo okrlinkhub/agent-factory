@@ -256,20 +256,44 @@ The component can keep the user-to-agent mapping internally through `identityBin
 You can bind your consumer user id directly to an `agentKey` without managing a custom
 table in the consumer app.
 
+#### Mandatory prerequisite: configure Telegram webhook first
+
+Before creating pairing codes, configure and verify Telegram webhook against your
+consumer ingress route.
+
+Use the exposed API:
+
+```ts
+await configureTelegramWebhook({
+  convexSiteUrl: "https://<your-deployment>.convex.site",
+  secretRef: "telegram.botToken.default", // optional, default shown
+});
+```
+
+This API:
+- loads bot token from component secrets (active secret for `secretRef`)
+- calls Telegram `setWebhook`
+- verifies status with `getWebhookInfo`
+- returns `isReady` so your UI can gate the pairing flow
+
+If `isReady` is false, do not proceed with pairing.
+
 Typical one-time pairing flow:
 
-1. Your app authenticates the user and creates a one-time pairing code via
+1. Configure webhook and verify `isReady === true` via `configureTelegramWebhook`.
+2. Your app authenticates the user and creates a one-time pairing code via
    `createPairingCode`.
-2. User opens Telegram deep-link (`/start <pairingCode>`).
-3. `registerRoutes(...)` webhook consumes the pairing code and performs
+3. User opens Telegram deep-link (`/start <pairingCode>`).
+4. `registerRoutes(...)` webhook consumes the pairing code and performs
    `bindUserAgent` automatically with `source: "telegram_pairing"` and
    Telegram ids from the update.
-4. Webhook ingress then resolves the binding internally and enqueues with the mapped
+5. Webhook ingress then resolves the binding internally and enqueues with the mapped
    `agentKey`.
 
 Available pairing APIs (via `exposeApi(...)`):
 - `createPairingCode`
 - `getPairingCodeStatus`
+- `configureTelegramWebhook`
 
 Telegram token storage (multi-tenant):
 - store tenant token in component secrets with an agent-scoped ref (for example `telegram.botToken.<agentKey>`)
@@ -360,6 +384,21 @@ The current provider implementation uses Fly Machines API endpoints for:
 - cordon machine
 - terminate machine
 
+### Isolation rule: one Fly app per Convex deployment
+
+Do **not** share the same Fly app across multiple Convex backends/components that run
+their own queue polling/reconcile loop.
+
+Why this is required:
+- workers in a Fly app share the same control plane (create/list/stop),
+- each backend computes desired capacity from its own queue state only,
+- mixed backends in one app can stop each other's machines or produce unpredictable polling behavior.
+
+Recommended pattern:
+- one Convex backend -> one dedicated Fly app (for example `agent-factory-workers-prod`)
+- another Convex backend -> another dedicated Fly app (for example `agent-factory-workers-staging`)
+- keep `providerConfig.appName` and worker image registry aligned per backend/environment.
+
 ### Worker image setup (required first step for custom skills)
 
 Any new skill you want inside OpenClaw agents must be added to the worker image source repo:
@@ -390,23 +429,23 @@ fly deploy --remote-only --depot=false --yes
 2) If deployment fails with `CONVEX_URL not set`, set the secret and retry:
 
 ```sh
-fly secrets set CONVEX_URL="https://<your-convex-deployment>.convex.cloud" -a agent-factory-workers
+fly secrets set CONVEX_URL="https://<your-convex-deployment>.convex.cloud" -a <your-fly-worker-app>
 ```
 
 3) Capture the new image tag from deploy output (for example
-`registry.fly.io/agent-factory-workers:deployment-XXXXXXXXXXXX`), then update
+`registry.fly.io/<your-fly-worker-app>:deployment-XXXXXXXXXXXX`), then update
 `src/component/config.ts` in this repo:
 
 ```ts
 export const DEFAULT_WORKER_IMAGE =
-  "registry.fly.io/agent-factory-workers:deployment-XXXXXXXXXXXX";
+  "registry.fly.io/<your-fly-worker-app>:deployment-XXXXXXXXXXXX";
 ```
 
 4) Verify rollout:
 
 ```sh
-fly status -a agent-factory-workers
-fly logs -a agent-factory-workers --no-tail
+fly status -a <your-fly-worker-app>
+fly logs -a <your-fly-worker-app> --no-tail
 ```
 
 5) (Recommended) Commit the `DEFAULT_WORKER_IMAGE` update so scheduler-driven

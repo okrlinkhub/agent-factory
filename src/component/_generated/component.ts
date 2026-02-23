@@ -49,6 +49,22 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         },
         Name
       >;
+      configureTelegramWebhook: FunctionReference<
+        "action",
+        "internal",
+        { convexSiteUrl: string; secretRef?: string },
+        {
+          currentUrl: null | string;
+          description: string;
+          isReady: boolean;
+          lastErrorDate: null | number;
+          lastErrorMessage: null | string;
+          ok: boolean;
+          pendingUpdateCount: number;
+          webhookUrl: string;
+        },
+        Name
+      >;
       consumePairingCode: FunctionReference<
         "mutation",
         "internal",
@@ -276,6 +292,22 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           version: string;
         },
         string,
+        Name
+      >;
+      configureTelegramWebhook: FunctionReference<
+        "action",
+        "internal",
+        { convexSiteUrl: string; secretRef?: string },
+        {
+          currentUrl: null | string;
+          description: string;
+          isReady: boolean;
+          lastErrorDate: null | number;
+          lastErrorMessage: null | string;
+          ok: boolean;
+          pendingUpdateCount: number;
+          webhookUrl: string;
+        },
         Name
       >;
       consumePairingCode: FunctionReference<
