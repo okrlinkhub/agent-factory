@@ -119,7 +119,10 @@ export function exposeApi(
       },
       handler: async (ctx, args) => {
         await options.auth(ctx, { type: "write" });
-        return await ctx.runMutation(component.queue.completeJob, args);
+        return await ctx.runMutation(component.queue.completeJob, {
+          ...args,
+          providerConfig: options.providerConfig,
+        });
       },
     }),
     workerFail: mutationGeneric({
@@ -131,7 +134,10 @@ export function exposeApi(
       },
       handler: async (ctx, args) => {
         await options.auth(ctx, { type: "write" });
-        return await ctx.runMutation(component.queue.failJob, args);
+        return await ctx.runMutation(component.queue.failJob, {
+          ...args,
+          providerConfig: options.providerConfig,
+        });
       },
     }),
     workerHydrationBundle: queryGeneric({

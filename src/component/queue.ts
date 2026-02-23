@@ -53,10 +53,12 @@ const bridgeProfileConfigValidator = v.object({
   serviceId: v.optional(v.string()),
   appKey: v.optional(v.string()),
   serviceKeySecretRef: v.optional(v.string()),
+  appBaseUrlMapJsonSecretRef: v.optional(v.string()),
 });
 
 const bridgeRuntimeConfigValidator = v.object({
   baseUrl: v.union(v.null(), v.string()),
+  appBaseUrlMapJson: v.union(v.null(), v.string()),
   serviceId: v.union(v.null(), v.string()),
   appKey: v.union(v.null(), v.string()),
   serviceKey: v.union(v.null(), v.string()),
@@ -66,6 +68,7 @@ const bridgeRuntimeConfigValidator = v.object({
 const BRIDGE_SECRET_REFS = {
   serviceKey: "agent-bridge.serviceKey",
   baseUrl: "agent-bridge.baseUrl",
+  baseUrlMapJson: "agent-bridge.baseUrlMapJson",
   serviceId: "agent-bridge.serviceId",
   appKey: "agent-bridge.appKey",
 } as const;
@@ -529,6 +532,7 @@ export const completeJob = mutation({
     messageId: v.id("messageQueue"),
     leaseId: v.string(),
     nowMs: v.optional(v.number()),
+    providerConfig: v.optional(providerConfigValidator),
   },
   returns: v.boolean(),
   handler: async (ctx, args) => {
@@ -588,7 +592,9 @@ export const completeJob = mutation({
           await ctx.scheduler.runAfter(
             delayMs,
             (internal.scheduler as any).enforceIdleShutdowns,
-            {},
+            {
+              providerConfig: args.providerConfig,
+            },
           );
         } catch (error) {
           console.warn(
@@ -610,6 +616,7 @@ export const failJob = mutation({
     leaseId: v.string(),
     errorMessage: v.string(),
     nowMs: v.optional(v.number()),
+    providerConfig: v.optional(providerConfigValidator),
   },
   returns: v.object({
     requeued: v.boolean(),
@@ -693,7 +700,9 @@ export const failJob = mutation({
           await ctx.scheduler.runAfter(
             delayMs,
             (internal.scheduler as any).enforceIdleShutdowns,
-            {},
+            {
+              providerConfig: args.providerConfig,
+            },
           );
         } catch (error) {
           console.warn(
@@ -1407,10 +1416,12 @@ async function resolveBridgeRuntimeConfig(
       serviceId?: string;
       appKey?: string;
       serviceKeySecretRef?: string;
+      appBaseUrlMapJsonSecretRef?: string;
     };
   },
 ): Promise<{
   baseUrl: string | null;
+  appBaseUrlMapJson: string | null;
   serviceId: string | null;
   appKey: string | null;
   serviceKey: string | null;
@@ -1421,6 +1432,7 @@ async function resolveBridgeRuntimeConfig(
   }
 
   const configuredServiceKeySecretRef = profile.bridgeConfig.serviceKeySecretRef ?? null;
+  const configuredBaseUrlMapSecretRef = profile.bridgeConfig.appBaseUrlMapJsonSecretRef ?? null;
   const [serviceKeySecretRef, serviceKey] = await resolveFirstActiveSecretValue(
     ctx,
     getScopedSecretRefCandidates(
@@ -1434,6 +1446,14 @@ async function resolveBridgeRuntimeConfig(
     ctx,
     getScopedSecretRefCandidates(profile.agentKey, BRIDGE_SECRET_REFS.baseUrl),
   );
+  const [, appBaseUrlMapJsonFromSecret] = await resolveFirstActiveSecretValue(
+    ctx,
+    getScopedSecretRefCandidates(
+      profile.agentKey,
+      BRIDGE_SECRET_REFS.baseUrlMapJson,
+      configuredBaseUrlMapSecretRef,
+    ),
+  );
   const [, serviceIdFromSecret] = await resolveFirstActiveSecretValue(
     ctx,
     getScopedSecretRefCandidates(profile.agentKey, BRIDGE_SECRET_REFS.serviceId),
@@ -1445,6 +1465,7 @@ async function resolveBridgeRuntimeConfig(
 
   return {
     baseUrl: profile.bridgeConfig.baseUrl ?? baseUrlFromSecret,
+    appBaseUrlMapJson: appBaseUrlMapJsonFromSecret,
     serviceId: profile.bridgeConfig.serviceId ?? serviceIdFromSecret,
     appKey: profile.bridgeConfig.appKey ?? appKeyFromSecret,
     serviceKey,
@@ -1458,6 +1479,7 @@ function getBridgeSecretRefsForProfile(
     | {
         enabled: boolean;
         serviceKeySecretRef?: string;
+        appBaseUrlMapJsonSecretRef?: string;
       }
     | undefined,
 ): Array<string> {
@@ -1466,6 +1488,8 @@ function getBridgeSecretRefsForProfile(
   }
   const refs: Array<string> = [
     bridgeConfig.serviceKeySecretRef ?? `${BRIDGE_SECRET_REFS.serviceKey}.${agentKey}`,
+    bridgeConfig.appBaseUrlMapJsonSecretRef ??
+      `${BRIDGE_SECRET_REFS.baseUrlMapJson}.${agentKey}`,
   ];
   return refs;
 }

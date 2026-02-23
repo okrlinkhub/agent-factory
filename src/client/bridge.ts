@@ -1,5 +1,6 @@
 export type HydratedBridgeRuntimeConfig = {
   baseUrl: string | null;
+  appBaseUrlMapJson: string | null;
   serviceId: string | null;
   appKey: string | null;
   serviceKey: string | null;
@@ -76,13 +77,17 @@ export function resolveBridgeRuntimeConfig(
       ok: false;
       error: string;
     } {
-  const baseUrl = pickValue(hydratedConfig?.baseUrl, readEnv(env, BRIDGE_ENV_KEYS.baseUrl));
+  const appKey = pickValue(hydratedConfig?.appKey, readEnv(env, BRIDGE_ENV_KEYS.appKey));
+  const baseUrl = pickValue(
+    hydratedConfig?.baseUrl,
+    readEnv(env, BRIDGE_ENV_KEYS.baseUrl),
+    resolveBaseUrlFromMap(hydratedConfig?.appBaseUrlMapJson, appKey),
+  );
   const serviceId = pickValue(hydratedConfig?.serviceId, readEnv(env, BRIDGE_ENV_KEYS.serviceId));
   const serviceKey = pickValue(
     hydratedConfig?.serviceKey,
     readEnv(env, BRIDGE_ENV_KEYS.serviceKey),
   );
-  const appKey = pickValue(hydratedConfig?.appKey, readEnv(env, BRIDGE_ENV_KEYS.appKey));
 
   const missing: Array<string> = [];
   if (!baseUrl) missing.push("baseUrl");
@@ -219,11 +224,32 @@ function readEnv(
   return null;
 }
 
-function pickValue(primary: string | null | undefined, fallback: string | null): string | null {
-  if (primary && primary.trim().length > 0) {
-    return primary.trim();
+function pickValue(...values: Array<string | null | undefined>): string | null {
+  for (const value of values) {
+    if (value && value.trim().length > 0) {
+      return value.trim();
+    }
   }
-  return fallback;
+  return null;
+}
+
+function resolveBaseUrlFromMap(
+  appBaseUrlMapJson: string | null | undefined,
+  appKey: string | null,
+): string | null {
+  if (!appBaseUrlMapJson || !appKey) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(appBaseUrlMapJson) as Record<string, unknown>;
+    const value = parsed?.[appKey];
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value.trim();
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 function normalizeBaseUrl(baseUrl: string): string {

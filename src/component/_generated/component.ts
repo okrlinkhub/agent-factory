@@ -267,6 +267,16 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           leaseId: string;
           messageId: string;
           nowMs?: number;
+          providerConfig?: {
+            appName: string;
+            image: string;
+            kind: "fly" | "runpod" | "ecs";
+            organizationSlug: string;
+            region: string;
+            volumeName: string;
+            volumePath: string;
+            volumeSizeGb: number;
+          };
           workerId: string;
         },
         boolean,
@@ -281,6 +291,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             appKey?: string;
             baseUrl?: string;
             enabled: boolean;
+            appBaseUrlMapJsonSecretRef?: string;
             serviceId?: string;
             serviceKeySecretRef?: string;
           };
@@ -401,6 +412,16 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           leaseId: string;
           messageId: string;
           nowMs?: number;
+          providerConfig?: {
+            appName: string;
+            image: string;
+            kind: "fly" | "runpod" | "ecs";
+            organizationSlug: string;
+            region: string;
+            volumeName: string;
+            volumePath: string;
+            volumeSizeGb: number;
+          };
           workerId: string;
         },
         {
@@ -426,6 +447,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           bridgeRuntimeConfig: null | {
             appKey: null | string;
             baseUrl: null | string;
+            appBaseUrlMapJson: null | string;
             serviceId: null | string;
             serviceKey: null | string;
             serviceKeySecretRef: null | string;
@@ -677,6 +699,16 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           leaseId: string;
           messageId: string;
           nowMs?: number;
+          providerConfig?: {
+            appName: string;
+            image: string;
+            kind: "fly" | "runpod" | "ecs";
+            organizationSlug: string;
+            region: string;
+            volumeName: string;
+            volumePath: string;
+            volumeSizeGb: number;
+          };
           workerId: string;
         },
         boolean,
@@ -729,6 +761,16 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           leaseId: string;
           messageId: string;
           nowMs?: number;
+          providerConfig?: {
+            appName: string;
+            image: string;
+            kind: "fly" | "runpod" | "ecs";
+            organizationSlug: string;
+            region: string;
+            volumeName: string;
+            volumePath: string;
+            volumeSizeGb: number;
+          };
           workerId: string;
         },
         {
@@ -768,6 +810,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           bridgeRuntimeConfig: null | {
             appKey: null | string;
             baseUrl: null | string;
+            appBaseUrlMapJson: null | string;
             serviceId: null | string;
             serviceKey: null | string;
             serviceKeySecretRef: null | string;
@@ -947,6 +990,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             appKey?: string;
             baseUrl?: string;
             enabled: boolean;
+            appBaseUrlMapJsonSecretRef?: string;
             serviceId?: string;
             serviceKeySecretRef?: string;
           };

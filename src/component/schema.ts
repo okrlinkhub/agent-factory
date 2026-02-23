@@ -16,6 +16,7 @@ export default defineSchema({
         serviceId: v.optional(v.string()),
         appKey: v.optional(v.string()),
         serviceKeySecretRef: v.optional(v.string()),
+        appBaseUrlMapJsonSecretRef: v.optional(v.string()),
       }),
     ),
     enabled: v.boolean(),

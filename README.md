@@ -43,7 +43,7 @@ Set them once:
 ```sh
 npx convex run example:importSecret '{
   "secretRef": "convex.url",
-  "plaintextValue": "https://<your-convex-deployment>.convex.cloud"
+  "plaintextValue": "https://<your-convex-deployment>.convex.site"
 }'
 
 npx convex run example:importSecret '{
@@ -51,6 +51,10 @@ npx convex run example:importSecret '{
   "plaintextValue": "fly_XXXXXXXXXXXXXXXX"
 }'
 ```
+
+Important URL mapping:
+- Fly worker environment variable `CONVEX_URL` must use the `.convex.cloud` URL.
+- Component secret `convex.url` must use the `.convex.site` URL (used by component workflows and webhook-facing integration paths).
 
 Verify status:
 
@@ -185,10 +189,22 @@ Naming convention supported by hydration resolver:
 - per-agent service key: `agent-bridge.serviceKey.<agentKey>` (recommended)
 - global service key fallback: `agent-bridge.serviceKey`
 - optional profile override: `bridgeConfig.serviceKeySecretRef`
+- per-agent base URL map JSON (for strict `execute-on-behalf` skills): `agent-bridge.baseUrlMapJson.<agentKey>`
+- global base URL map JSON fallback: `agent-bridge.baseUrlMapJson`
 - optional per-agent/global overrides for `baseUrl`, `serviceId`, `appKey` via:
   - `agent-bridge.baseUrl.<agentKey>` / `agent-bridge.baseUrl`
   - `agent-bridge.serviceId.<agentKey>` / `agent-bridge.serviceId`
   - `agent-bridge.appKey.<agentKey>` / `agent-bridge.appKey`
+
+Example value for `agent-bridge.baseUrlMapJson.<agentKey>`:
+
+```json
+{"linkhub-w4":"https://www.okrlink.app","amc":"https://amc-primogroup.convex.site"}
+```
+
+This is still stored as a normal component secret ref (same naming convention as other
+bridge secrets). The secret **value** is the JSON map expected by strict agent-bridge
+skills (`APP_BASE_URL_MAP_JSON`).
 
 Hydration includes `bridgeRuntimeConfig` for the worker loop.
 

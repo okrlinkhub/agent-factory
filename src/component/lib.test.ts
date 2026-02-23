@@ -178,6 +178,10 @@ describe("component lib", () => {
       secretRef: "agent-bridge.serviceKey.bridge-agent",
       plaintextValue: "abs_live_bridge_key",
     });
+    await t.mutation(api.queue.importPlaintextSecret, {
+      secretRef: "agent-bridge.baseUrlMapJson.bridge-agent",
+      plaintextValue: '{"crm":"https://consumer.example.com","billing":"https://billing.example.com"}',
+    });
 
     const messageId = await t.mutation(api.lib.enqueue, {
       conversationId: "bridge:chat:1",
@@ -200,6 +204,7 @@ describe("component lib", () => {
     expect(bundle).not.toBeNull();
     expect(bundle?.bridgeRuntimeConfig).toEqual({
       baseUrl: "https://consumer.example.com",
+      appBaseUrlMapJson: '{"crm":"https://consumer.example.com","billing":"https://billing.example.com"}',
       serviceId: "openclaw-prod",
       appKey: "crm",
       serviceKey: "abs_live_bridge_key",

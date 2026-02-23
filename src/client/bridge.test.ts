@@ -11,6 +11,7 @@ describe("bridge helpers", () => {
     const resolved = resolveBridgeRuntimeConfig(
       {
         baseUrl: "https://consumer.example.com",
+        appBaseUrlMapJson: null,
         serviceId: "openclaw-prod",
         appKey: "crm",
         serviceKey: "abs_live_key",
@@ -75,6 +76,7 @@ describe("bridge helpers", () => {
       toolArgs: { cartId: "c1" },
       hydratedConfig: {
         baseUrl: "https://consumer.example.com",
+        appBaseUrlMapJson: null,
         serviceId: "openclaw-prod",
         appKey: "crm",
         serviceKey: "abs_live_key",
