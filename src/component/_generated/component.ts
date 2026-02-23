@@ -378,6 +378,16 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             rawUpdateJson?: string;
           };
           priority?: number;
+          providerConfig?: {
+            appName: string;
+            image: string;
+            kind: "fly" | "runpod" | "ecs";
+            organizationSlug: string;
+            region: string;
+            volumeName: string;
+            volumePath: string;
+            volumeSizeGb: number;
+          };
           scheduledFor?: number;
         },
         string,
@@ -689,6 +699,16 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             rawUpdateJson?: string;
           };
           priority?: number;
+          providerConfig?: {
+            appName: string;
+            image: string;
+            kind: "fly" | "runpod" | "ecs";
+            organizationSlug: string;
+            region: string;
+            volumeName: string;
+            volumePath: string;
+            volumeSizeGb: number;
+          };
           scheduledFor?: number;
         },
         string,

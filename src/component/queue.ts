@@ -6,7 +6,7 @@ import {
   mutation,
   query,
 } from "./_generated/server.js";
-import { computeRetryDelayMs, DEFAULT_CONFIG } from "./config.js";
+import { computeRetryDelayMs, DEFAULT_CONFIG, providerConfigValidator } from "./config.js";
 
 const queueStatusValidator = v.union(
   v.literal("queued"),
@@ -79,6 +79,7 @@ export const enqueueMessage = mutation({
     scheduledFor: v.optional(v.number()),
     maxAttempts: v.optional(v.number()),
     nowMs: v.optional(v.number()),
+    providerConfig: v.optional(providerConfigValidator),
   },
   returns: v.id("messageQueue"),
   handler: async (ctx, args) => {
@@ -125,6 +126,7 @@ export const enqueueMessage = mutation({
     try {
       await ctx.scheduler.runAfter(0, (internal.scheduler as any).reconcileWorkerPoolFromEnqueue, {
         workspaceId: "default",
+        providerConfig: args.providerConfig,
       });
     } catch (error) {
       console.warn(

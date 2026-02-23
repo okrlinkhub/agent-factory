@@ -99,7 +99,7 @@ async function runReconcileWorkerPool(
 ) {
   const nowMs = args.nowMs ?? Date.now();
   const scaling = args.scalingPolicy ?? DEFAULT_CONFIG.scaling;
-  const providerConfig = args.providerConfig ?? DEFAULT_CONFIG.provider;
+  const providerConfig = ensureProviderConfig(args.providerConfig ?? DEFAULT_CONFIG.provider);
   const flyApiToken =
     args.flyApiToken ??
     (await ctx.runQuery(internal.queue.getActiveSecretPlaintext, {
@@ -304,7 +304,7 @@ async function runEnforceIdleShutdowns(
   },
 ) {
   const nowMs = args.nowMs ?? Date.now();
-  const providerConfig = args.providerConfig ?? DEFAULT_CONFIG.provider;
+  const providerConfig = ensureProviderConfig(args.providerConfig ?? DEFAULT_CONFIG.provider);
   const flyApiToken =
     args.flyApiToken ??
     (await ctx.runQuery(internal.queue.getActiveSecretPlaintext, {
@@ -429,6 +429,27 @@ function resolveProvider(kind: string, flyApiToken: string): WorkerProvider {
     default:
       throw new Error(`Unsupported provider '${kind}'`);
   }
+}
+
+function ensureProviderConfig(providerConfig: typeof DEFAULT_CONFIG.provider) {
+  const requiredFields: Array<
+    "appName" | "organizationSlug" | "image" | "region" | "volumeName" | "volumePath"
+  > = [
+    "appName",
+    "organizationSlug",
+    "image",
+    "region",
+    "volumeName",
+    "volumePath",
+  ];
+  for (const field of requiredFields) {
+    if (!providerConfig[field]?.trim()) {
+      throw new Error(
+        `Missing providerConfig.${field}. Pass providerConfig explicitly when starting/reconciling workers.`,
+      );
+    }
+  }
+  return providerConfig;
 }
 
 function clamp(value: number, min: number, max: number): number {

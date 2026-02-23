@@ -7,7 +7,11 @@ import {
 import type { Auth, HttpRouter } from "convex/server";
 import { v } from "convex/values";
 import type { ComponentApi } from "../component/_generated/component.js";
-import { scalingPolicyValidator } from "../component/config.js";
+import {
+  providerConfigValidator,
+  scalingPolicyValidator,
+  type ProviderConfig,
+} from "../component/config.js";
 export {
   bridgeFunctionKeyFromToolName,
   executeBridgeFunction,
@@ -32,6 +36,7 @@ export function exposeApi(
             agentKey?: string;
           },
     ) => Promise<string>;
+    providerConfig?: ProviderConfig;
   },
 ) {
   return {
@@ -53,6 +58,7 @@ export function exposeApi(
         rawUpdateJson: v.optional(v.string()),
         metadata: v.optional(v.record(v.string(), v.string())),
         priority: v.optional(v.number()),
+        providerConfig: v.optional(providerConfigValidator),
       },
       handler: async (ctx, args) => {
         await options.auth(ctx, {
@@ -72,6 +78,7 @@ export function exposeApi(
             metadata: args.metadata,
           },
           priority: args.priority,
+          providerConfig: args.providerConfig ?? options.providerConfig,
         });
       },
     }),
@@ -302,6 +309,7 @@ export function exposeApi(
           convexUrl: args.convexUrl,
           workspaceId: args.workspaceId,
           scalingPolicy: args.scalingPolicy,
+          providerConfig: options.providerConfig,
         });
       },
     }),
@@ -313,6 +321,7 @@ export function exposeApi(
         await options.auth(ctx, { type: "read" });
         return await ctx.runAction((component.lib as any).checkIdleShutdowns, {
           flyApiToken: args.flyApiToken,
+          providerConfig: options.providerConfig,
         });
       },
     }),
@@ -343,6 +352,7 @@ export function exposeApi(
         const reconcile = await ctx.runAction(component.lib.reconcileWorkers, {
           workspaceId: args.workspaceId,
           scalingPolicy: args.scalingPolicy,
+          providerConfig: options.providerConfig,
         });
         return {
           released,
@@ -463,12 +473,14 @@ export function registerRoutes(
     resolveAgentKeyFromBinding = true,
     fallbackAgentKey = "default",
     requireBindingForTelegram = false,
+    providerConfig,
   }: {
     pathPrefix?: string;
     resolveAgentKey?: (update: unknown) => string;
     resolveAgentKeyFromBinding?: boolean;
     fallbackAgentKey?: string;
     requireBindingForTelegram?: boolean;
+    providerConfig?: ProviderConfig;
   } = {},
 ) {
   http.route({
@@ -636,6 +648,7 @@ export function registerRoutes(
           rawUpdateJson: JSON.stringify(update),
           metadata,
         },
+        providerConfig,
       });
       return new Response(JSON.stringify({ ok: true }), {
         status: 202,

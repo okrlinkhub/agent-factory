@@ -4,6 +4,17 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api.js";
 import { initConvexTest } from "./setup.test.js";
 
+const TEST_PROVIDER_CONFIG = {
+  kind: "fly" as const,
+  appName: "agent-factory-workers-test",
+  organizationSlug: "personal",
+  image: "registry.fly.io/agent-factory-workers-test:test-image",
+  region: "iad",
+  volumeName: "openclaw_data_test",
+  volumePath: "/data",
+  volumeSizeGb: 10,
+};
+
 describe("component lib", () => {
   beforeEach(async () => {
     vi.useFakeTimers();
@@ -361,6 +372,7 @@ describe("component lib", () => {
         idleTimeoutMs: 300_000,
         reconcileIntervalMs: 15_000,
       },
+      providerConfig: TEST_PROVIDER_CONFIG,
     });
     expect(reconcile.activeWorkers).toBe(3);
     expect(reconcile.spawned).toBe(0);
@@ -433,16 +445,7 @@ describe("component lib", () => {
         idleTimeoutMs: 300_000,
         reconcileIntervalMs: 15_000,
       },
-      providerConfig: {
-        kind: "fly",
-        appName: "agent-factory-workers",
-        organizationSlug: "personal",
-        image: "registry.fly.io/agent-factory-workers:test-image",
-        region: "iad",
-        volumeName: "",
-        volumePath: "",
-        volumeSizeGb: 10,
-      },
+      providerConfig: TEST_PROVIDER_CONFIG,
     });
     expect(reconcile.activeWorkers).toBe(3);
     expect(reconcile.spawned).toBe(0);

@@ -4,6 +4,17 @@ import { exposeApi } from "@okrlinkhub/agent-factory";
 import { v } from "convex/values";
 import { Auth } from "convex/server";
 
+const EXAMPLE_PROVIDER_CONFIG = {
+  kind: "fly" as const,
+  appName: "agent-factory-workers-example",
+  organizationSlug: "personal",
+  image: "registry.fly.io/agent-factory-workers-example:test-image",
+  region: "iad",
+  volumeName: "openclaw_data_example",
+  volumePath: "/data",
+  volumeSizeGb: 10,
+};
+
 export const enqueueTelegramMessage = mutation({
   args: { text: v.string(), chatId: v.string() },
   handler: async (ctx, args) => {
@@ -16,6 +27,7 @@ export const enqueueTelegramMessage = mutation({
         providerUserId: args.chatId,
         messageText: args.text,
       },
+      providerConfig: EXAMPLE_PROVIDER_CONFIG,
     });
   },
 });
@@ -152,6 +164,7 @@ export const {
   consumePairingCode,
   getPairingCodeStatus,
 } = exposeApi(components.agentFactory, {
+  providerConfig: EXAMPLE_PROVIDER_CONFIG,
   auth: async (ctx, operation) => {
     const userId = await getAuthUserId(ctx);
     if (userId === null && operation.type === "write") {

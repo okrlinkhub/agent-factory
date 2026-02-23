@@ -59,7 +59,7 @@ export type AgentFactoryConfig = {
 };
 
 export const DEFAULT_WORKER_IMAGE =
-  "registry.fly.io/agent-factory-workers:deployment-01KJ1MDGR3KQV025S7SZXJTZDH";
+  "";
 export const DEFAULT_WORKER_VOLUME_NAME = "openclaw_data";
 export const DEFAULT_WORKER_VOLUME_PATH = "/data";
 export const DEFAULT_WORKER_RUNTIME_ENV: Record<string, string> = {
@@ -172,11 +172,11 @@ export const DEFAULT_CONFIG: AgentFactoryConfig = {
   },
   provider: {
     kind: "fly",
-    appName: "agent-factory-workers",
-    organizationSlug: "personal",
+    appName: "",
+    organizationSlug: "",
     image: DEFAULT_WORKER_IMAGE,
-    region: "iad",
-    volumeName: DEFAULT_WORKER_VOLUME_NAME,
+    region: "",
+    volumeName: "",
     volumePath: DEFAULT_WORKER_VOLUME_PATH,
     volumeSizeGb: 10,
   },
