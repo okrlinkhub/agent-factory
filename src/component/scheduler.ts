@@ -99,30 +99,6 @@ async function runReconcileWorkerPool(
 ) {
   const nowMs = args.nowMs ?? Date.now();
   const scaling = args.scalingPolicy ?? DEFAULT_CONFIG.scaling;
-  const providerConfig = ensureProviderConfig(args.providerConfig ?? DEFAULT_CONFIG.provider);
-  const flyApiToken =
-    args.flyApiToken ??
-    (await ctx.runQuery(internal.queue.getActiveSecretPlaintext, {
-      secretRef: "fly.apiToken",
-    }));
-  if (!flyApiToken) {
-    throw new Error(
-      "Missing Fly API token. Import an active 'fly.apiToken' secret or pass flyApiToken explicitly.",
-    );
-  }
-  const convexUrl =
-    args.convexUrl ??
-    (await ctx.runQuery(internal.queue.getActiveSecretPlaintext, {
-      secretRef: "convex.url",
-    }));
-  if (!convexUrl) {
-    throw new Error(
-      "Missing Convex URL. Import an active 'convex.url' secret or pass convexUrl explicitly.",
-    );
-  }
-  const workspaceId = args.workspaceId ?? "default";
-  const provider = resolveProvider(providerConfig.kind, flyApiToken);
-
   // Always recover expired leases before scaling decisions.
   // This prevents stale "processing" jobs from blocking queue drain forever.
   try {
@@ -154,6 +130,48 @@ async function runReconcileWorkerPool(
     appName: string | null;
     region: string | null;
   }> = await ctx.runQuery((internal.queue as any).listWorkersForScheduler, {});
+  const staleHeartbeatCutoff = nowMs - DEFAULT_CONFIG.lease.staleAfterMs;
+  const healthyActiveWorkers = workerRows.filter(
+    (worker) => worker.status === "active" && worker.heartbeatAt > staleHeartbeatCutoff,
+  ).length;
+
+  const providerConfig = await resolveProviderConfigWithFallback(
+    ctx,
+    args.providerConfig,
+    nowMs,
+  );
+  if (!providerConfig) {
+    // Best-effort mode: if runtime providerConfig has not been initialized yet,
+    // do not fail enqueue-triggered reconcile loudly.
+    return {
+      activeWorkers: healthyActiveWorkers,
+      spawned: 0,
+      terminated: 0,
+    };
+  }
+
+  const flyApiToken =
+    args.flyApiToken ??
+    (await ctx.runQuery(internal.queue.getActiveSecretPlaintext, {
+      secretRef: "fly.apiToken",
+    }));
+  if (!flyApiToken) {
+    throw new Error(
+      "Missing Fly API token. Import an active 'fly.apiToken' secret or pass flyApiToken explicitly.",
+    );
+  }
+  const convexUrl =
+    args.convexUrl ??
+    (await ctx.runQuery(internal.queue.getActiveSecretPlaintext, {
+      secretRef: "convex.url",
+    }));
+  if (!convexUrl) {
+    throw new Error(
+      "Missing Convex URL. Import an active 'convex.url' secret or pass convexUrl explicitly.",
+    );
+  }
+  const workspaceId = args.workspaceId ?? "default";
+  const provider = resolveProvider(providerConfig.kind, flyApiToken);
 
   const localWorkersWithMachine = workerRows.filter(
     (worker) =>
@@ -219,7 +237,6 @@ async function runReconcileWorkerPool(
       `[scheduler] dedicated volume mode enabled for ${providerConfig.volumeName}; clamping desired workers to 1`,
     );
   }
-  const staleHeartbeatCutoff = nowMs - DEFAULT_CONFIG.lease.staleAfterMs;
   const activeWorkers = workerRows.filter(
     (worker) => worker.status === "active" && worker.heartbeatAt > staleHeartbeatCutoff,
   ).length;
@@ -320,7 +337,19 @@ async function runEnforceIdleShutdowns(
   },
 ) {
   const nowMs = args.nowMs ?? Date.now();
-  const providerConfig = ensureProviderConfig(args.providerConfig ?? DEFAULT_CONFIG.provider);
+  const providerConfig = await resolveProviderConfigWithFallback(
+    ctx,
+    args.providerConfig,
+    nowMs,
+  );
+  if (!providerConfig) {
+    return {
+      checked: 0,
+      stopped: 0,
+      pending: 0,
+      nextCheckScheduled: false,
+    };
+  }
   const flyApiToken =
     args.flyApiToken ??
     (await ctx.runQuery(internal.queue.getActiveSecretPlaintext, {
@@ -466,6 +495,43 @@ function ensureProviderConfig(providerConfig: typeof DEFAULT_CONFIG.provider) {
     }
   }
   return providerConfig;
+}
+
+function isMissingProviderConfigError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("Missing providerConfig.");
+}
+
+async function resolveProviderConfigWithFallback(
+  ctx: any,
+  explicitProviderConfig: typeof DEFAULT_CONFIG.provider | undefined,
+  nowMs: number,
+): Promise<typeof DEFAULT_CONFIG.provider | null> {
+  if (explicitProviderConfig) {
+    const validated = ensureProviderConfig(explicitProviderConfig);
+    await ctx.runMutation((internal.queue as any).upsertProviderRuntimeConfig, {
+      providerConfig: validated,
+      nowMs,
+    });
+    return validated;
+  }
+
+  const storedProviderConfig = await ctx.runQuery(
+    (internal.queue as any).getProviderRuntimeConfig,
+    {},
+  );
+  if (!storedProviderConfig) {
+    return null;
+  }
+
+  try {
+    return ensureProviderConfig(storedProviderConfig);
+  } catch (error) {
+    if (isMissingProviderConfigError(error)) {
+      return null;
+    }
+    throw error;
+  }
 }
 
 function clamp(value: number, min: number, max: number): number {

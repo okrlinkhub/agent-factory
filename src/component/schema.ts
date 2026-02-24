@@ -132,6 +132,21 @@ export default defineSchema({
     .index("by_heartbeatAt", ["heartbeatAt"])
     .index("by_scheduledShutdownAt", ["scheduledShutdownAt"]),
 
+  runtimeConfig: defineTable({
+    key: v.string(),
+    providerConfig: v.object({
+      kind: v.union(v.literal("fly"), v.literal("runpod"), v.literal("ecs")),
+      appName: v.string(),
+      organizationSlug: v.string(),
+      image: v.string(),
+      region: v.string(),
+      volumeName: v.string(),
+      volumePath: v.string(),
+      volumeSizeGb: v.number(),
+    }),
+    updatedAt: v.number(),
+  }).index("by_key", ["key"]),
+
   dataSnapshots: defineTable({
     workspaceId: v.string(),
     agentKey: v.string(),
