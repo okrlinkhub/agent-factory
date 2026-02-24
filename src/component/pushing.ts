@@ -477,9 +477,13 @@ export const triggerPushJobNow = mutation({
     if (!agentKey) {
       throw new Error("No active agent binding for user");
     }
+    const conversationTarget = await resolveConversationTargetForUser(ctx, job.consumerUserId);
     const runKey = `manual:${job._id}:${nowMs}`;
+    const targetProviderUserId = conversationTarget.source === "telegram_chat"
+      ? (conversationTarget.telegramUserId ?? conversationTarget.telegramChatId ?? job.consumerUserId)
+      : job.consumerUserId;
     const messageId = await enqueuePushMessage(ctx, {
-      conversationId: `user:${job.consumerUserId}`,
+      conversationId: conversationTarget.conversationId,
       agentKey,
       consumerUserId: job.consumerUserId,
       text: job.text,
@@ -487,8 +491,17 @@ export const triggerPushJobNow = mutation({
         pushJobId: String(job._id),
         runKey,
         pushMode: "manual",
+        conversationTargetSource: conversationTarget.source,
+        ...(conversationTarget.telegramChatId
+          ? { telegramChatId: conversationTarget.telegramChatId }
+          : {}),
+        ...(conversationTarget.telegramUserId
+          ? { telegramUserId: conversationTarget.telegramUserId }
+          : {}),
       },
       scheduledFor: nowMs,
+      provider: conversationTarget.source === "telegram_chat" ? "telegram" : "system_push",
+      providerUserId: targetProviderUserId,
       providerConfig: args.providerConfig,
     });
     await ctx.db.insert("messagePushDispatches", {
@@ -578,9 +591,13 @@ export const dispatchDuePushJobs = mutation({
         failed += 1;
         continue;
       }
+      const conversationTarget = await resolveConversationTargetForUser(ctx, job.consumerUserId);
       try {
+        const targetProviderUserId = conversationTarget.source === "telegram_chat"
+          ? (conversationTarget.telegramUserId ?? conversationTarget.telegramChatId ?? job.consumerUserId)
+          : job.consumerUserId;
         const messageId = await enqueuePushMessage(ctx, {
-          conversationId: `user:${job.consumerUserId}`,
+          conversationId: conversationTarget.conversationId,
           agentKey,
           consumerUserId: job.consumerUserId,
           text: job.text,
@@ -588,8 +605,17 @@ export const dispatchDuePushJobs = mutation({
             pushJobId: String(job._id),
             runKey,
             pushMode: "scheduled",
+            conversationTargetSource: conversationTarget.source,
+            ...(conversationTarget.telegramChatId
+              ? { telegramChatId: conversationTarget.telegramChatId }
+              : {}),
+            ...(conversationTarget.telegramUserId
+              ? { telegramUserId: conversationTarget.telegramUserId }
+              : {}),
           },
           scheduledFor: nowMs,
+          provider: conversationTarget.source === "telegram_chat" ? "telegram" : "system_push",
+          providerUserId: targetProviderUserId,
           providerConfig: args.providerConfig,
         });
         await ctx.db.insert("messagePushDispatches", {
@@ -688,6 +714,8 @@ export const sendBroadcastToAllActiveAgents = mutation({
             companyId: args.companyId,
           },
           scheduledFor: nowMs,
+          provider: "system_push",
+          providerUserId: targetConsumerUserId,
           providerConfig: args.providerConfig,
         });
         await ctx.db.insert("messagePushBroadcastDispatches", {
@@ -775,6 +803,8 @@ async function enqueuePushMessage(
     text: string;
     metadata: Record<string, string>;
     scheduledFor: number;
+    provider: string;
+    providerUserId: string;
     providerConfig?: ProviderConfig;
   },
 ): Promise<Id<"messageQueue">> {
@@ -782,8 +812,8 @@ async function enqueuePushMessage(
     conversationId: input.conversationId,
     agentKey: input.agentKey,
     payload: {
-      provider: "system_push",
-      providerUserId: input.consumerUserId,
+      provider: input.provider,
+      providerUserId: input.providerUserId,
       messageText: input.text,
       metadata: input.metadata,
     },
@@ -810,6 +840,36 @@ async function resolveActiveAgentKeyForUser(ctx: MutationCtx, consumerUserId: st
     return null;
   }
   return binding.agentKey;
+}
+
+async function resolveConversationTargetForUser(
+  ctx: MutationCtx,
+  consumerUserId: string,
+): Promise<{
+  conversationId: string;
+  source: "telegram_chat" | "legacy_user";
+  telegramChatId?: string;
+  telegramUserId?: string;
+}> {
+  const binding = await ctx.db
+    .query("identityBindings")
+    .withIndex("by_consumerUserId_and_status", (q) =>
+      q.eq("consumerUserId", consumerUserId).eq("status", "active"),
+    )
+    .first();
+  const telegramChatId = binding?.telegramChatId?.trim();
+  if (telegramChatId && telegramChatId.length > 0) {
+    return {
+      conversationId: `telegram:${telegramChatId}`,
+      source: "telegram_chat",
+      telegramChatId,
+      telegramUserId: binding?.telegramUserId?.trim() || undefined,
+    };
+  }
+  return {
+    conversationId: `user:${consumerUserId}`,
+    source: "legacy_user",
+  };
 }
 
 async function advanceJobNextRun(

@@ -457,7 +457,7 @@ describe("component lib", () => {
     expect(reconcile.terminated).toBe(0);
   });
 
-  test("push jobs should dispatch scheduled messages and log runs", async () => {
+  test("push jobs should dispatch scheduled messages with fallback user conversation id", async () => {
     const t = initConvexTest();
     await t.mutation(api.queue.upsertAgentProfile, {
       agentKey: "push-agent",
@@ -499,6 +499,10 @@ describe("component lib", () => {
 
     const queueStats = await t.query(api.lib.queueStats, {});
     expect(queueStats.queuedReady).toBe(1);
+    const claim = await t.mutation(api.lib.claim, { workerId: "worker-push-fallback-1" });
+    expect(claim?.conversationId).toBe("user:user-push-1");
+    expect(claim?.payload.provider).toBe("system_push");
+    expect(claim?.payload.providerUserId).toBe("user-push-1");
 
     const jobDispatches = await t.query((api.lib as any).listPushDispatchesByJob, {
       jobId,
@@ -506,6 +510,101 @@ describe("component lib", () => {
     });
     expect(jobDispatches.length).toBe(1);
     expect(jobDispatches[0].status).toBe("enqueued");
+  });
+
+  test("triggerPushJobNow should reuse telegram chat conversation id", async () => {
+    const t = initConvexTest();
+    await t.mutation(api.queue.upsertAgentProfile, {
+      agentKey: "push-telegram-manual-agent",
+      version: "1.0.0",
+      soulMd: "# Soul",
+      clientMd: "# Client",
+      skills: [],
+      secretsRef: [],
+      enabled: true,
+    });
+    await t.mutation(api.lib.bindUserAgent, {
+      consumerUserId: "user-push-telegram-manual",
+      agentKey: "push-telegram-manual-agent",
+      source: "telegram_pairing",
+      telegramUserId: "tg-user-manual-1",
+      telegramChatId: "8246761447",
+    });
+
+    const nowMs = Date.UTC(2026, 0, 1, 8, 0, 0);
+    const jobId = await t.mutation((api.lib as any).createPushJobCustom, {
+      companyId: "co-tg-manual",
+      consumerUserId: "user-push-telegram-manual",
+      title: "Manual push",
+      text: "Messaggio manuale",
+      periodicity: "manual",
+      timezone: "UTC",
+      schedule: {
+        kind: "manual",
+      },
+      nowMs,
+    });
+
+    await t.mutation((api.lib as any).triggerPushJobNow, {
+      jobId,
+      nowMs,
+    });
+
+    const claim = await t.mutation(api.lib.claim, { workerId: "worker-push-telegram-manual-1" });
+    expect(claim?.conversationId).toBe("telegram:8246761447");
+    expect(claim?.payload.provider).toBe("telegram");
+    expect(claim?.payload.providerUserId).toBe("tg-user-manual-1");
+    expect(claim?.payload.metadata?.telegramChatId).toBe("8246761447");
+    expect(claim?.payload.metadata?.telegramUserId).toBe("tg-user-manual-1");
+  });
+
+  test("dispatchDuePushJobs should reuse telegram chat conversation id when available", async () => {
+    const t = initConvexTest();
+    await t.mutation(api.queue.upsertAgentProfile, {
+      agentKey: "push-telegram-scheduled-agent",
+      version: "1.0.0",
+      soulMd: "# Soul",
+      clientMd: "# Client",
+      skills: [],
+      secretsRef: [],
+      enabled: true,
+    });
+    await t.mutation(api.lib.bindUserAgent, {
+      consumerUserId: "user-push-telegram-scheduled",
+      agentKey: "push-telegram-scheduled-agent",
+      source: "telegram_pairing",
+      telegramUserId: "tg-user-scheduled-1",
+      telegramChatId: "9988776655",
+    });
+
+    const baseMs = Date.UTC(2026, 0, 1, 7, 59, 0);
+    await t.mutation((api.lib as any).createPushJobCustom, {
+      companyId: "co-tg-scheduled",
+      consumerUserId: "user-push-telegram-scheduled",
+      title: "Daily telegram check",
+      text: "Ping telegram",
+      periodicity: "daily",
+      timezone: "UTC",
+      schedule: {
+        kind: "daily",
+        time: "08:00",
+      },
+      nowMs: baseMs,
+    });
+
+    const dispatch = await t.mutation((api.lib as any).dispatchDuePushJobs, {
+      nowMs: baseMs + 6 * 60_000,
+      limit: 50,
+    });
+    expect(dispatch.enqueued).toBe(1);
+    expect(dispatch.failed).toBe(0);
+
+    const claim = await t.mutation(api.lib.claim, { workerId: "worker-push-telegram-scheduled-1" });
+    expect(claim?.conversationId).toBe("telegram:9988776655");
+    expect(claim?.payload.provider).toBe("telegram");
+    expect(claim?.payload.providerUserId).toBe("tg-user-scheduled-1");
+    expect(claim?.payload.metadata?.telegramChatId).toBe("9988776655");
+    expect(claim?.payload.metadata?.telegramUserId).toBe("tg-user-scheduled-1");
   });
 
   test("admin broadcast should enqueue to all active company agents", async () => {
