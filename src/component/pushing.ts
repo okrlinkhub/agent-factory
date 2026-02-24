@@ -3,6 +3,8 @@ import { internal } from "./_generated/api.js";
 import { mutation, query } from "./_generated/server.js";
 import type { MutationCtx } from "./_generated/server.js";
 import type { Id } from "./_generated/dataModel.js";
+import { providerConfigValidator } from "./config.js";
+import type { ProviderConfig } from "./config.js";
 
 const periodicityValidator = v.union(
   v.literal("manual"),
@@ -459,6 +461,7 @@ export const triggerPushJobNow = mutation({
   args: {
     jobId: v.id("messagePushJobs"),
     nowMs: v.optional(v.number()),
+    providerConfig: v.optional(providerConfigValidator),
   },
   returns: v.object({
     enqueuedMessageId: v.id("messageQueue"),
@@ -486,6 +489,7 @@ export const triggerPushJobNow = mutation({
         pushMode: "manual",
       },
       scheduledFor: nowMs,
+      providerConfig: args.providerConfig,
     });
     await ctx.db.insert("messagePushDispatches", {
       jobId: job._id,
@@ -524,6 +528,7 @@ export const dispatchDuePushJobs = mutation({
   args: {
     nowMs: v.optional(v.number()),
     limit: v.optional(v.number()),
+    providerConfig: v.optional(providerConfigValidator),
   },
   returns: v.object({
     scanned: v.number(),
@@ -585,6 +590,7 @@ export const dispatchDuePushJobs = mutation({
             pushMode: "scheduled",
           },
           scheduledFor: nowMs,
+          providerConfig: args.providerConfig,
         });
         await ctx.db.insert("messagePushDispatches", {
           jobId: job._id,
@@ -631,6 +637,7 @@ export const sendBroadcastToAllActiveAgents = mutation({
     text: v.string(),
     requestedBy: v.string(),
     nowMs: v.optional(v.number()),
+    providerConfig: v.optional(providerConfigValidator),
   },
   returns: v.object({
     broadcastId: v.id("messagePushBroadcasts"),
@@ -681,6 +688,7 @@ export const sendBroadcastToAllActiveAgents = mutation({
             companyId: args.companyId,
           },
           scheduledFor: nowMs,
+          providerConfig: args.providerConfig,
         });
         await ctx.db.insert("messagePushBroadcastDispatches", {
           broadcastId,
@@ -767,6 +775,7 @@ async function enqueuePushMessage(
     text: string;
     metadata: Record<string, string>;
     scheduledFor: number;
+    providerConfig?: ProviderConfig;
   },
 ): Promise<Id<"messageQueue">> {
   return await ctx.runMutation((internal.queue as any).enqueueMessage, {
@@ -779,6 +788,7 @@ async function enqueuePushMessage(
       metadata: input.metadata,
     },
     scheduledFor: input.scheduledFor,
+    providerConfig: input.providerConfig,
   });
 }
 

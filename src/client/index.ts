@@ -637,7 +637,10 @@ export function exposeApi(
       },
       handler: async (ctx, args) => {
         await options.auth(ctx, { type: "write" });
-        return await ctx.runMutation((component.lib as any).triggerPushJobNow, args);
+        return await ctx.runMutation((component.lib as any).triggerPushJobNow, {
+          ...args,
+          providerConfig: options.providerConfig,
+        });
       },
     }),
     dispatchDuePushJobs: mutationGeneric({
@@ -647,7 +650,10 @@ export function exposeApi(
       },
       handler: async (ctx, args) => {
         await options.auth(ctx, { type: "write" });
-        return await ctx.runMutation((component.lib as any).dispatchDuePushJobs, args);
+        return await ctx.runMutation((component.lib as any).dispatchDuePushJobs, {
+          ...args,
+          providerConfig: options.providerConfig,
+        });
       },
     }),
     sendBroadcastToAllActiveAgents: mutationGeneric({
@@ -659,7 +665,10 @@ export function exposeApi(
       },
       handler: async (ctx, args) => {
         await options.auth(ctx, { type: "write" });
-        return await ctx.runMutation((component.lib as any).sendBroadcastToAllActiveAgents, args);
+        return await ctx.runMutation((component.lib as any).sendBroadcastToAllActiveAgents, {
+          ...args,
+          providerConfig: options.providerConfig,
+        });
       },
     }),
     listPushDispatchesByJob: queryGeneric({

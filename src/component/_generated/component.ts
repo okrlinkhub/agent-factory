@@ -451,7 +451,20 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       dispatchDuePushJobs: FunctionReference<
         "mutation",
         "internal",
-        { limit?: number; nowMs?: number },
+        {
+          limit?: number;
+          nowMs?: number;
+          providerConfig?: {
+            appName: string;
+            image: string;
+            kind: "fly" | "runpod" | "ecs";
+            organizationSlug: string;
+            region: string;
+            volumeName: string;
+            volumePath: string;
+            volumeSizeGb: number;
+          };
+        },
         { enqueued: number; failed: number; scanned: number; skipped: number },
         Name
       >;
@@ -772,6 +785,16 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         {
           companyId: string;
           nowMs?: number;
+          providerConfig?: {
+            appName: string;
+            image: string;
+            kind: "fly" | "runpod" | "ecs";
+            organizationSlug: string;
+            region: string;
+            volumeName: string;
+            volumePath: string;
+            volumeSizeGb: number;
+          };
           requestedBy: string;
           text: string;
           title: string;
@@ -794,7 +817,20 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       triggerPushJobNow: FunctionReference<
         "mutation",
         "internal",
-        { jobId: string; nowMs?: number },
+        {
+          jobId: string;
+          nowMs?: number;
+          providerConfig?: {
+            appName: string;
+            image: string;
+            kind: "fly" | "runpod" | "ecs";
+            organizationSlug: string;
+            region: string;
+            volumeName: string;
+            volumePath: string;
+            volumeSizeGb: number;
+          };
+        },
         { enqueuedMessageId: string; runKey: string },
         Name
       >;
@@ -947,7 +983,20 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       dispatchDuePushJobs: FunctionReference<
         "mutation",
         "internal",
-        { limit?: number; nowMs?: number },
+        {
+          limit?: number;
+          nowMs?: number;
+          providerConfig?: {
+            appName: string;
+            image: string;
+            kind: "fly" | "runpod" | "ecs";
+            organizationSlug: string;
+            region: string;
+            volumeName: string;
+            volumePath: string;
+            volumeSizeGb: number;
+          };
+        },
         { enqueued: number; failed: number; scanned: number; skipped: number },
         Name
       >;
@@ -1023,6 +1072,16 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         {
           companyId: string;
           nowMs?: number;
+          providerConfig?: {
+            appName: string;
+            image: string;
+            kind: "fly" | "runpod" | "ecs";
+            organizationSlug: string;
+            region: string;
+            volumeName: string;
+            volumePath: string;
+            volumeSizeGb: number;
+          };
           requestedBy: string;
           text: string;
           title: string;
@@ -1045,7 +1104,20 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       triggerPushJobNow: FunctionReference<
         "mutation",
         "internal",
-        { jobId: string; nowMs?: number },
+        {
+          jobId: string;
+          nowMs?: number;
+          providerConfig?: {
+            appName: string;
+            image: string;
+            kind: "fly" | "runpod" | "ecs";
+            organizationSlug: string;
+            region: string;
+            volumeName: string;
+            volumePath: string;
+            volumeSizeGb: number;
+          };
+        },
         { enqueuedMessageId: string; runKey: string },
         Name
       >;

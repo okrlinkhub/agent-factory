@@ -771,6 +771,7 @@ export const releaseExpiredLeases = internalMutation({
     let requeued = 0;
     let unlocked = 0;
     for (const message of stuck) {
+      const claimedWorkerId = message.claimedBy;
       await ctx.db.patch(message._id, {
         status: "queued",
         scheduledFor: nowMs,
@@ -793,6 +794,24 @@ export const releaseExpiredLeases = internalMutation({
       ) {
         await ctx.db.patch(conversation._id, { processingLock: undefined });
         unlocked += 1;
+      }
+
+      if (claimedWorkerId) {
+        const worker = await ctx.db
+          .query("workers")
+          .withIndex("by_workerId", (q) => q.eq("workerId", claimedWorkerId))
+          .unique();
+        if (worker && worker.status === "active") {
+          const nextLoad = Math.max(0, worker.load - 1);
+          const nextScheduledShutdownAt =
+            nextLoad === 0 ? nowMs + DEFAULT_CONFIG.scaling.idleTimeoutMs : undefined;
+          await ctx.db.patch(worker._id, {
+            load: nextLoad,
+            heartbeatAt: nowMs,
+            scheduledShutdownAt: nextScheduledShutdownAt,
+            stoppedAt: undefined,
+          });
+        }
       }
     }
 
@@ -823,6 +842,7 @@ export const releaseStuckJobs = mutation({
     let requeued = 0;
     let unlocked = 0;
     for (const message of stuck) {
+      const claimedWorkerId = message.claimedBy;
       await ctx.db.patch(message._id, {
         status: "queued",
         scheduledFor: nowMs,
@@ -845,6 +865,24 @@ export const releaseStuckJobs = mutation({
       ) {
         await ctx.db.patch(conversation._id, { processingLock: undefined });
         unlocked += 1;
+      }
+
+      if (claimedWorkerId) {
+        const worker = await ctx.db
+          .query("workers")
+          .withIndex("by_workerId", (q) => q.eq("workerId", claimedWorkerId))
+          .unique();
+        if (worker && worker.status === "active") {
+          const nextLoad = Math.max(0, worker.load - 1);
+          const nextScheduledShutdownAt =
+            nextLoad === 0 ? nowMs + DEFAULT_CONFIG.scaling.idleTimeoutMs : undefined;
+          await ctx.db.patch(worker._id, {
+            load: nextLoad,
+            heartbeatAt: nowMs,
+            scheduledShutdownAt: nextScheduledShutdownAt,
+            stoppedAt: undefined,
+          });
+        }
       }
     }
 

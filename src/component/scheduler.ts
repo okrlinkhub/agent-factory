@@ -123,6 +123,21 @@ async function runReconcileWorkerPool(
   const workspaceId = args.workspaceId ?? "default";
   const provider = resolveProvider(providerConfig.kind, flyApiToken);
 
+  // Always recover expired leases before scaling decisions.
+  // This prevents stale "processing" jobs from blocking queue drain forever.
+  try {
+    await ctx.runMutation((internal.queue as any).releaseExpiredLeases, {
+      nowMs,
+      limit: 500,
+    });
+  } catch (error) {
+    console.warn(
+      `[scheduler] releaseExpiredLeases failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+
   const activeConversationCount: number = await ctx.runQuery(
     (internal.queue as any).getActiveConversationCountForScheduler,
     { nowMs, limit: 1000 },
@@ -204,8 +219,9 @@ async function runReconcileWorkerPool(
       `[scheduler] dedicated volume mode enabled for ${providerConfig.volumeName}; clamping desired workers to 1`,
     );
   }
+  const staleHeartbeatCutoff = nowMs - DEFAULT_CONFIG.lease.staleAfterMs;
   const activeWorkers = workerRows.filter(
-    (worker) => worker.status === "active",
+    (worker) => worker.status === "active" && worker.heartbeatAt > staleHeartbeatCutoff,
   ).length;
 
   if (targetActiveWorkers > activeWorkers) {
