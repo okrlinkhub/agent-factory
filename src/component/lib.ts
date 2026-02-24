@@ -2,6 +2,8 @@ export {
   upsertAgentProfile as configureAgent,
   importPlaintextSecret as importSecret,
   getSecretsStatus as secretStatus,
+  providerRuntimeConfig,
+  setProviderRuntimeConfig,
   enqueueMessage as enqueue,
   releaseStuckJobs,
   appendConversationMessages,

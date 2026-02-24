@@ -129,6 +129,40 @@ export const listUsersWithBindings = query({
   },
 });
 
+const providerRuntimeConfigValidator = v.object({
+  kind: v.union(v.literal("fly"), v.literal("runpod"), v.literal("ecs")),
+  appName: v.string(),
+  organizationSlug: v.string(),
+  image: v.string(),
+  region: v.string(),
+  volumeName: v.string(),
+  volumePath: v.string(),
+  volumeSizeGb: v.number(),
+});
+
+export const getProviderRuntimeConfig = query({
+  args: {},
+  returns: v.union(v.null(), providerRuntimeConfigValidator),
+  handler: async (ctx) => {
+    await getAuthUserId(ctx);
+    return await ctx.runQuery((components.agentFactory.queue as any).getProviderRuntimeConfig, {});
+  },
+});
+
+export const setProviderRuntimeConfig = mutation({
+  args: {
+    providerConfig: providerRuntimeConfigValidator,
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    await getAuthUserId(ctx);
+    await ctx.runMutation((components.agentFactory.queue as any).upsertProviderRuntimeConfig, {
+      providerConfig: args.providerConfig,
+    });
+    return null;
+  },
+});
+
 export const {
   enqueue,
   workerClaim,

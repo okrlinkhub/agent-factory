@@ -402,6 +402,49 @@ export const upsertProviderRuntimeConfig = internalMutation({
   },
 });
 
+export const providerRuntimeConfig = query({
+  args: {},
+  returns: v.union(v.null(), providerConfigValidator),
+  handler: async (ctx) => {
+    const row = await ctx.db
+      .query("runtimeConfig")
+      .withIndex("by_key", (q) => q.eq("key", "provider"))
+      .unique();
+    if (!row) {
+      return null;
+    }
+    return row.providerConfig;
+  },
+});
+
+export const setProviderRuntimeConfig = mutation({
+  args: {
+    providerConfig: providerConfigValidator,
+    nowMs: v.optional(v.number()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const nowMs = args.nowMs ?? Date.now();
+    const existing = await ctx.db
+      .query("runtimeConfig")
+      .withIndex("by_key", (q) => q.eq("key", "provider"))
+      .unique();
+    if (!existing) {
+      await ctx.db.insert("runtimeConfig", {
+        key: "provider",
+        providerConfig: args.providerConfig,
+        updatedAt: nowMs,
+      });
+      return null;
+    }
+    await ctx.db.patch(existing._id, {
+      providerConfig: args.providerConfig,
+      updatedAt: nowMs,
+    });
+    return null;
+  },
+});
+
 export const generateMediaUploadUrl = mutation({
   args: {},
   returns: v.object({

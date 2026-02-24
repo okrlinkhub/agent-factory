@@ -91,6 +91,23 @@ export function exposeApi(
         return await ctx.runQuery(component.lib.queueStats, {});
       },
     }),
+    getProviderRuntimeConfig: queryGeneric({
+      args: {},
+      handler: async (ctx) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runQuery((component.queue as any).getProviderRuntimeConfig, {});
+      },
+    }),
+    setProviderRuntimeConfig: mutationGeneric({
+      args: {
+        providerConfig: providerConfigValidator,
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "write" });
+        await ctx.runMutation((component.queue as any).upsertProviderRuntimeConfig, args);
+        return null;
+      },
+    }),
     enqueue: mutationGeneric({
       args: {
         conversationId: v.string(),

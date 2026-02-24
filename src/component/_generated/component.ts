@@ -704,6 +704,22 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         }>,
         Name
       >;
+      providerRuntimeConfig: FunctionReference<
+        "query",
+        "internal",
+        {},
+        null | {
+          appName: string;
+          image: string;
+          kind: "fly" | "runpod" | "ecs";
+          organizationSlug: string;
+          region: string;
+          volumeName: string;
+          volumePath: string;
+          volumeSizeGb: number;
+        },
+        Name
+      >;
       queueStats: FunctionReference<
         "query",
         "internal",
@@ -805,6 +821,25 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           failed: number;
           totalTargets: number;
         },
+        Name
+      >;
+      setProviderRuntimeConfig: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          nowMs?: number;
+          providerConfig: {
+            appName: string;
+            image: string;
+            kind: "fly" | "runpod" | "ecs";
+            organizationSlug: string;
+            region: string;
+            volumeName: string;
+            volumePath: string;
+            volumeSizeGb: number;
+          };
+        },
+        null,
         Name
       >;
       setPushJobEnabled: FunctionReference<
@@ -1489,11 +1524,46 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         { expiresAt: number; snapshotId: string; uploadUrl: string },
         Name
       >;
+      providerRuntimeConfig: FunctionReference<
+        "query",
+        "internal",
+        {},
+        null | {
+          appName: string;
+          image: string;
+          kind: "fly" | "runpod" | "ecs";
+          organizationSlug: string;
+          region: string;
+          volumeName: string;
+          volumePath: string;
+          volumeSizeGb: number;
+        },
+        Name
+      >;
       releaseStuckJobs: FunctionReference<
         "mutation",
         "internal",
         { limit?: number; nowMs?: number },
         { requeued: number; unlocked: number },
+        Name
+      >;
+      setProviderRuntimeConfig: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          nowMs?: number;
+          providerConfig: {
+            appName: string;
+            image: string;
+            kind: "fly" | "runpod" | "ecs";
+            organizationSlug: string;
+            region: string;
+            volumeName: string;
+            volumePath: string;
+            volumeSizeGb: number;
+          };
+        },
+        null,
         Name
       >;
       upsertAgentProfile: FunctionReference<

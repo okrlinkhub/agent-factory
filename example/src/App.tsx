@@ -1,7 +1,7 @@
 import "./App.css";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../convex/_generated/api";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 function App() {
   const seedDefaultAgent = useMutation(api.example.seedDefaultAgent);
@@ -20,6 +20,8 @@ function App() {
   const startWorkers = useAction(api.example.startWorkers);
   const checkIdleShutdowns = useAction(api.example.checkIdleShutdowns);
   const deleteFlyVolume = useAction(api.example.deleteFlyVolume);
+  const getProviderRuntimeConfig = useQuery(api.example.getProviderRuntimeConfig, {});
+  const setProviderRuntimeConfig = useMutation(api.example.setProviderRuntimeConfig);
   const stats = useQuery(api.example.queueStats, {});
   const workerStats = useQuery(api.example.workerStats, {});
   const users = useQuery(api.example.listExampleUsers, {});
@@ -35,6 +37,16 @@ function App() {
   const [convexSecretUrl, setConvexSecretUrl] = useState(import.meta.env.VITE_CONVEX_URL ?? "");
   const [telegramBotToken, setTelegramBotToken] = useState("");
   const [flyApiToken, setFlyApiToken] = useState("");
+  const [providerKind, setProviderKind] = useState<"fly" | "runpod" | "ecs">("fly");
+  const [providerAppName, setProviderAppName] = useState("agent-factory-workers-example");
+  const [providerOrgSlug, setProviderOrgSlug] = useState("personal");
+  const [providerImage, setProviderImage] = useState(
+    "registry.fly.io/agent-factory-workers-example:test-image",
+  );
+  const [providerRegion, setProviderRegion] = useState("iad");
+  const [providerVolumeName, setProviderVolumeName] = useState("openclaw_data_example");
+  const [providerVolumePath, setProviderVolumePath] = useState("/data");
+  const [providerVolumeSizeGb, setProviderVolumeSizeGb] = useState("10");
   const [seedResult, setSeedResult] = useState<string | null>(null);
   const [usersResult, setUsersResult] = useState<string | null>(null);
   const [secretResult, setSecretResult] = useState<string | null>(null);
@@ -44,6 +56,7 @@ function App() {
   const [deleteVolumeResult, setDeleteVolumeResult] = useState<string | null>(null);
   const [pairingResult, setPairingResult] = useState<string | null>(null);
   const [pushingResult, setPushingResult] = useState<string | null>(null);
+  const [providerConfigResult, setProviderConfigResult] = useState<string | null>(null);
   const [selectedUserId, setSelectedUserId] = useState("");
   const [bindingAgentKey, setBindingAgentKey] = useState("default");
   const [telegramBotUsername, setTelegramBotUsername] = useState("");
@@ -69,6 +82,42 @@ function App() {
   );
   const convexUrl = import.meta.env.VITE_CONVEX_URL.replace(".cloud", ".site");
   const convexSecretStatus = (secretsStatus ?? []).find((item) => item.secretRef === "convex.url");
+
+  useEffect(() => {
+    if (!getProviderRuntimeConfig) return;
+    setProviderKind(getProviderRuntimeConfig.kind);
+    setProviderAppName(getProviderRuntimeConfig.appName);
+    setProviderOrgSlug(getProviderRuntimeConfig.organizationSlug);
+    setProviderImage(getProviderRuntimeConfig.image);
+    setProviderRegion(getProviderRuntimeConfig.region);
+    setProviderVolumeName(getProviderRuntimeConfig.volumeName);
+    setProviderVolumePath(getProviderRuntimeConfig.volumePath);
+    setProviderVolumeSizeGb(String(getProviderRuntimeConfig.volumeSizeGb));
+  }, [getProviderRuntimeConfig]);
+
+  const saveProviderRuntimeConfig = async () => {
+    setBusy("provider-config");
+    setProviderConfigResult(null);
+    try {
+      await setProviderRuntimeConfig({
+        providerConfig: {
+          kind: providerKind,
+          appName: providerAppName.trim(),
+          organizationSlug: providerOrgSlug.trim(),
+          image: providerImage.trim(),
+          region: providerRegion.trim(),
+          volumeName: providerVolumeName.trim(),
+          volumePath: providerVolumePath.trim(),
+          volumeSizeGb: Number(providerVolumeSizeGb),
+        },
+      });
+      setProviderConfigResult("Provider runtime config salvata.");
+    } catch (error) {
+      setProviderConfigResult((error as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const seedAgent = async () => {
     setBusy("seed");
@@ -349,6 +398,89 @@ function App() {
             <code> Missing Convex URL</code>.
           </p>
           {secretResult ? <p style={{ marginTop: "0.5rem" }}>{secretResult}</p> : null}
+        </div>
+        <div
+          style={{
+            marginBottom: "1rem",
+            padding: "1rem",
+            backgroundColor: "rgba(128, 128, 128, 0.1)",
+            borderRadius: "8px",
+          }}
+        >
+          <h3>0b) Provider Runtime Config (runtimeConfig)</h3>
+          <p style={{ marginTop: 0, marginBottom: "0.75rem" }}>
+            Configura il provider usato dal reconcile enqueue-triggered quando il consumer non passa
+            esplicitamente providerConfig.
+          </p>
+          <div style={{ marginBottom: "0.5rem" }}>
+            <select
+              value={providerKind}
+              onChange={(event) =>
+                setProviderKind(event.target.value as "fly" | "runpod" | "ecs")
+              }
+              style={{ marginRight: "0.5rem", padding: "0.5rem", width: "16%" }}
+            >
+              <option value="fly">fly</option>
+              <option value="runpod">runpod</option>
+              <option value="ecs">ecs</option>
+            </select>
+            <input
+              value={providerAppName}
+              onChange={(event) => setProviderAppName(event.target.value)}
+              placeholder="appName"
+              style={{ marginRight: "0.5rem", padding: "0.5rem", width: "30%" }}
+            />
+            <input
+              value={providerOrgSlug}
+              onChange={(event) => setProviderOrgSlug(event.target.value)}
+              placeholder="organizationSlug"
+              style={{ marginRight: "0.5rem", padding: "0.5rem", width: "20%" }}
+            />
+          </div>
+          <div style={{ marginBottom: "0.5rem" }}>
+            <input
+              value={providerImage}
+              onChange={(event) => setProviderImage(event.target.value)}
+              placeholder="image"
+              style={{ marginRight: "0.5rem", padding: "0.5rem", width: "48%" }}
+            />
+            <input
+              value={providerRegion}
+              onChange={(event) => setProviderRegion(event.target.value)}
+              placeholder="region"
+              style={{ marginRight: "0.5rem", padding: "0.5rem", width: "14%" }}
+            />
+            <input
+              value={providerVolumeSizeGb}
+              onChange={(event) => setProviderVolumeSizeGb(event.target.value)}
+              placeholder="volumeSizeGb"
+              style={{ marginRight: "0.5rem", padding: "0.5rem", width: "14%" }}
+            />
+          </div>
+          <div style={{ marginBottom: "0.75rem" }}>
+            <input
+              value={providerVolumeName}
+              onChange={(event) => setProviderVolumeName(event.target.value)}
+              placeholder="volumeName"
+              style={{ marginRight: "0.5rem", padding: "0.5rem", width: "30%" }}
+            />
+            <input
+              value={providerVolumePath}
+              onChange={(event) => setProviderVolumePath(event.target.value)}
+              placeholder="volumePath"
+              style={{ marginRight: "0.5rem", padding: "0.5rem", width: "20%" }}
+            />
+            <button onClick={saveProviderRuntimeConfig} disabled={busy !== null}>
+              {busy === "provider-config" ? "Saving..." : "Save provider config"}
+            </button>
+          </div>
+          <p style={{ fontSize: "0.85rem", marginTop: 0, marginBottom: 0 }}>
+            Runtime attuale:{" "}
+            {getProviderRuntimeConfig
+              ? `${getProviderRuntimeConfig.kind} | ${getProviderRuntimeConfig.appName} | ${getProviderRuntimeConfig.region}`
+              : "non impostato"}
+          </p>
+          {providerConfigResult ? <p style={{ marginTop: "0.5rem" }}>{providerConfigResult}</p> : null}
         </div>
         <div
           style={{

@@ -477,7 +477,7 @@ function resolveProvider(kind: string, flyApiToken: string): WorkerProvider {
 }
 
 function ensureProviderConfig(providerConfig: typeof DEFAULT_CONFIG.provider) {
-  const requiredFields: Array<
+  const requiredStringFields: Array<
     "appName" | "organizationSlug" | "image" | "region" | "volumeName" | "volumePath"
   > = [
     "appName",
@@ -487,12 +487,17 @@ function ensureProviderConfig(providerConfig: typeof DEFAULT_CONFIG.provider) {
     "volumeName",
     "volumePath",
   ];
-  for (const field of requiredFields) {
-    if (!providerConfig[field]?.trim()) {
+  for (const field of requiredStringFields) {
+    if (typeof providerConfig[field] !== "string" || providerConfig[field].trim().length === 0) {
       throw new Error(
         `Missing providerConfig.${field}. Pass providerConfig explicitly when starting/reconciling workers.`,
       );
     }
+  }
+  if (!Number.isFinite(providerConfig.volumeSizeGb) || providerConfig.volumeSizeGb <= 0) {
+    throw new Error(
+      "Missing providerConfig.volumeSizeGb. Pass providerConfig explicitly when starting/reconciling workers.",
+    );
   }
   return providerConfig;
 }
