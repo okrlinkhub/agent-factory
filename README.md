@@ -241,6 +241,12 @@ Fallback env (worker-side only, used when hydration misses values):
 - `OPENCLAW_SERVICE_KEY` or `AGENT_BRIDGE_SERVICE_KEY`
 - `OPENCLAW_AGENT_APP` / `OPENCLAW_APP_KEY` / `AGENT_BRIDGE_APP_KEY`
 
+Fly.io practical note (recommended for strict bridge flow):
+- set `AGENT_BRIDGE_DEFAULT_APP_KEY`, `APP_BASE_URL_MAP_JSON`, `OPENCLAW_SERVICE_ID`,
+  and `OPENCLAW_SERVICE_KEY` directly in Fly app env/secrets (`fly secrets set` or `fly.toml [env]`).
+- keep these runtime values in Fly even when component secrets are configured, so workers
+  can always resolve strict `execute-on-behalf` calls without depending on secret hydration timing.
+
 ### HTTP Routes
 
 You can mount an ingress webhook route in your app:

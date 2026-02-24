@@ -288,15 +288,16 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         {
           agentKey: string;
           bridgeConfig?: {
+            appBaseUrlMapJsonSecretRef?: string;
             appKey?: string;
             baseUrl?: string;
             enabled: boolean;
-            appBaseUrlMapJsonSecretRef?: string;
             serviceId?: string;
             serviceKeySecretRef?: string;
           };
           clientMd?: string;
           enabled: boolean;
+          providerUserId?: string;
           secretsRef: Array<string>;
           skills: Array<string>;
           soulMd: string;
@@ -445,9 +446,9 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         null | {
           agentKey: string;
           bridgeRuntimeConfig: null | {
+            appBaseUrlMapJson: null | string;
             appKey: null | string;
             baseUrl: null | string;
-            appBaseUrlMapJson: null | string;
             serviceId: null | string;
             serviceKey: null | string;
             serviceKeySecretRef: null | string;
@@ -808,9 +809,9 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         null | {
           agentKey: string;
           bridgeRuntimeConfig: null | {
+            appBaseUrlMapJson: null | string;
             appKey: null | string;
             baseUrl: null | string;
-            appBaseUrlMapJson: null | string;
             serviceId: null | string;
             serviceKey: null | string;
             serviceKeySecretRef: null | string;
@@ -987,15 +988,16 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         {
           agentKey: string;
           bridgeConfig?: {
+            appBaseUrlMapJsonSecretRef?: string;
             appKey?: string;
             baseUrl?: string;
             enabled: boolean;
-            appBaseUrlMapJsonSecretRef?: string;
             serviceId?: string;
             serviceKeySecretRef?: string;
           };
           clientMd?: string;
           enabled: boolean;
+          providerUserId?: string;
           secretsRef: Array<string>;
           skills: Array<string>;
           soulMd: string;

@@ -4,6 +4,7 @@ import { v } from "convex/values";
 export default defineSchema({
   agentProfiles: defineTable({
     agentKey: v.string(),
+    providerUserId: v.optional(v.string()),
     version: v.string(),
     soulMd: v.string(),
     clientMd: v.optional(v.string()),

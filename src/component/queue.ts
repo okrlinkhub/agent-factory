@@ -94,6 +94,17 @@ export const enqueueMessage = mutation({
     if (!profile || !profile.enabled) {
       throw new Error(`Agent profile '${args.agentKey}' not found or disabled`);
     }
+    const resolvedProviderUserId =
+      profile.providerUserId && profile.providerUserId.trim().length > 0
+        ? profile.providerUserId.trim()
+        : args.payload.providerUserId;
+    const payload = {
+      ...args.payload,
+      metadata: {
+        ...(args.payload.metadata ?? {}),
+        providerUserId: resolvedProviderUserId,
+      },
+    };
 
     const existingConversation = await ctx.db
       .query("conversations")
@@ -119,7 +130,7 @@ export const enqueueMessage = mutation({
     const messageId = await ctx.db.insert("messageQueue", {
       conversationId: args.conversationId,
       agentKey: args.agentKey,
-      payload: args.payload,
+      payload,
       status: "queued",
       priority,
       scheduledFor: args.scheduledFor ?? nowMs,
@@ -212,6 +223,7 @@ export const appendConversationMessages = mutation({
 export const upsertAgentProfile = mutation({
   args: {
     agentKey: v.string(),
+    providerUserId: v.optional(v.string()),
     version: v.string(),
     soulMd: v.string(),
     clientMd: v.optional(v.string()),
