@@ -366,11 +366,93 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         },
         Name
       >;
+      createPushJobCustom: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          companyId: string;
+          consumerUserId: string;
+          enabled?: boolean;
+          nowMs?: number;
+          periodicity: "manual" | "daily" | "weekly" | "monthly";
+          schedule:
+            | { kind: "manual" }
+            | { kind: "daily"; time: string }
+            | { kind: "weekly"; time: string; weekday: number }
+            | { dayOfMonth: number | "last"; kind: "monthly"; time: string };
+          text: string;
+          timezone: string;
+          title: string;
+        },
+        string,
+        Name
+      >;
+      createPushJobFromTemplate: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          companyId: string;
+          consumerUserId: string;
+          enabled?: boolean;
+          nowMs?: number;
+          schedule?:
+            | { kind: "manual" }
+            | { kind: "daily"; time: string }
+            | { kind: "weekly"; time: string; weekday: number }
+            | { dayOfMonth: number | "last"; kind: "monthly"; time: string };
+          templateId: string;
+          timezone: string;
+        },
+        string,
+        Name
+      >;
+      createPushTemplate: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          actorUserId: string;
+          companyId: string;
+          enabled?: boolean;
+          nowMs?: number;
+          periodicity: "manual" | "daily" | "weekly" | "monthly";
+          suggestedTimes: Array<
+            | { kind: "daily"; time: string }
+            | { kind: "weekly"; time: string; weekday: number }
+            | { dayOfMonth: number | "last"; kind: "monthly"; time: string }
+          >;
+          templateKey: string;
+          text: string;
+          title: string;
+        },
+        string,
+        Name
+      >;
       deleteFlyVolume: FunctionReference<
         "action",
         "internal",
         { appName: string; flyApiToken?: string; volumeId: string },
         { message: string; ok: boolean; status: number },
+        Name
+      >;
+      deletePushJob: FunctionReference<
+        "mutation",
+        "internal",
+        { jobId: string },
+        boolean,
+        Name
+      >;
+      deletePushTemplate: FunctionReference<
+        "mutation",
+        "internal",
+        { templateId: string },
+        boolean,
+        Name
+      >;
+      dispatchDuePushJobs: FunctionReference<
+        "mutation",
+        "internal",
+        { limit?: number; nowMs?: number },
+        { enqueued: number; failed: number; scanned: number; skipped: number },
         Name
       >;
       enqueue: FunctionReference<
@@ -543,6 +625,72 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         { secretId: string; secretRef: string; version: number },
         Name
       >;
+      listPushDispatchesByJob: FunctionReference<
+        "query",
+        "internal",
+        { jobId: string; limit?: number },
+        Array<{
+          _id: string;
+          createdAt: number;
+          error: null | string;
+          runKey: string;
+          scheduledFor: number;
+          status: "enqueued" | "skipped" | "failed";
+        }>,
+        Name
+      >;
+      listPushJobsForUser: FunctionReference<
+        "query",
+        "internal",
+        { consumerUserId: string; includeDisabled?: boolean },
+        Array<{
+          _id: string;
+          agentKey: null | string;
+          companyId: string;
+          consumerUserId: string;
+          createdAt: number;
+          enabled: boolean;
+          lastRunAt: null | number;
+          lastRunKey: null | string;
+          nextRunAt: null | number;
+          periodicity: "manual" | "daily" | "weekly" | "monthly";
+          schedule:
+            | { kind: "manual" }
+            | { kind: "daily"; time: string }
+            | { kind: "weekly"; time: string; weekday: number }
+            | { dayOfMonth: number | "last"; kind: "monthly"; time: string };
+          sourceTemplateId: null | string;
+          text: string;
+          timezone: string;
+          title: string;
+          updatedAt: number;
+        }>,
+        Name
+      >;
+      listPushTemplatesByCompany: FunctionReference<
+        "query",
+        "internal",
+        { companyId: string; includeDisabled?: boolean },
+        Array<{
+          _id: string;
+          companyId: string;
+          createdAt: number;
+          createdBy: string;
+          enabled: boolean;
+          periodicity: "manual" | "daily" | "weekly" | "monthly";
+          suggestedTimes: Array<
+            | { kind: "daily"; time: string }
+            | { kind: "weekly"; time: string; weekday: number }
+            | { dayOfMonth: number | "last"; kind: "monthly"; time: string }
+          >;
+          templateKey: string;
+          text: string;
+          title: string;
+          updatedAt: number;
+          updatedBy: string;
+        }>,
+        Name
+      >;
       queueStats: FunctionReference<
         "query",
         "internal",
@@ -618,6 +766,78 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         }>,
         Name
       >;
+      sendBroadcastToAllActiveAgents: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          companyId: string;
+          nowMs?: number;
+          requestedBy: string;
+          text: string;
+          title: string;
+        },
+        {
+          broadcastId: string;
+          enqueued: number;
+          failed: number;
+          totalTargets: number;
+        },
+        Name
+      >;
+      setPushJobEnabled: FunctionReference<
+        "mutation",
+        "internal",
+        { enabled: boolean; jobId: string; nowMs?: number },
+        boolean,
+        Name
+      >;
+      triggerPushJobNow: FunctionReference<
+        "mutation",
+        "internal",
+        { jobId: string; nowMs?: number },
+        { enqueuedMessageId: string; runKey: string },
+        Name
+      >;
+      updatePushJob: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          enabled?: boolean;
+          jobId: string;
+          nowMs?: number;
+          periodicity?: "manual" | "daily" | "weekly" | "monthly";
+          schedule?:
+            | { kind: "manual" }
+            | { kind: "daily"; time: string }
+            | { kind: "weekly"; time: string; weekday: number }
+            | { dayOfMonth: number | "last"; kind: "monthly"; time: string };
+          text?: string;
+          timezone?: string;
+          title?: string;
+        },
+        boolean,
+        Name
+      >;
+      updatePushTemplate: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          actorUserId: string;
+          enabled?: boolean;
+          nowMs?: number;
+          periodicity?: "manual" | "daily" | "weekly" | "monthly";
+          suggestedTimes?: Array<
+            | { kind: "daily"; time: string }
+            | { kind: "weekly"; time: string; weekday: number }
+            | { dayOfMonth: number | "last"; kind: "monthly"; time: string }
+          >;
+          templateId: string;
+          text?: string;
+          title?: string;
+        },
+        boolean,
+        Name
+      >;
       workerStats: FunctionReference<
         "query",
         "internal",
@@ -647,6 +867,228 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           Name
         >;
       };
+    };
+    pushing: {
+      createPushJobCustom: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          companyId: string;
+          consumerUserId: string;
+          enabled?: boolean;
+          nowMs?: number;
+          periodicity: "manual" | "daily" | "weekly" | "monthly";
+          schedule:
+            | { kind: "manual" }
+            | { kind: "daily"; time: string }
+            | { kind: "weekly"; time: string; weekday: number }
+            | { dayOfMonth: number | "last"; kind: "monthly"; time: string };
+          text: string;
+          timezone: string;
+          title: string;
+        },
+        string,
+        Name
+      >;
+      createPushJobFromTemplate: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          companyId: string;
+          consumerUserId: string;
+          enabled?: boolean;
+          nowMs?: number;
+          schedule?:
+            | { kind: "manual" }
+            | { kind: "daily"; time: string }
+            | { kind: "weekly"; time: string; weekday: number }
+            | { dayOfMonth: number | "last"; kind: "monthly"; time: string };
+          templateId: string;
+          timezone: string;
+        },
+        string,
+        Name
+      >;
+      createPushTemplate: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          actorUserId: string;
+          companyId: string;
+          enabled?: boolean;
+          nowMs?: number;
+          periodicity: "manual" | "daily" | "weekly" | "monthly";
+          suggestedTimes: Array<
+            | { kind: "daily"; time: string }
+            | { kind: "weekly"; time: string; weekday: number }
+            | { dayOfMonth: number | "last"; kind: "monthly"; time: string }
+          >;
+          templateKey: string;
+          text: string;
+          title: string;
+        },
+        string,
+        Name
+      >;
+      deletePushJob: FunctionReference<
+        "mutation",
+        "internal",
+        { jobId: string },
+        boolean,
+        Name
+      >;
+      deletePushTemplate: FunctionReference<
+        "mutation",
+        "internal",
+        { templateId: string },
+        boolean,
+        Name
+      >;
+      dispatchDuePushJobs: FunctionReference<
+        "mutation",
+        "internal",
+        { limit?: number; nowMs?: number },
+        { enqueued: number; failed: number; scanned: number; skipped: number },
+        Name
+      >;
+      listPushDispatchesByJob: FunctionReference<
+        "query",
+        "internal",
+        { jobId: string; limit?: number },
+        Array<{
+          _id: string;
+          createdAt: number;
+          error: null | string;
+          runKey: string;
+          scheduledFor: number;
+          status: "enqueued" | "skipped" | "failed";
+        }>,
+        Name
+      >;
+      listPushJobsForUser: FunctionReference<
+        "query",
+        "internal",
+        { consumerUserId: string; includeDisabled?: boolean },
+        Array<{
+          _id: string;
+          agentKey: null | string;
+          companyId: string;
+          consumerUserId: string;
+          createdAt: number;
+          enabled: boolean;
+          lastRunAt: null | number;
+          lastRunKey: null | string;
+          nextRunAt: null | number;
+          periodicity: "manual" | "daily" | "weekly" | "monthly";
+          schedule:
+            | { kind: "manual" }
+            | { kind: "daily"; time: string }
+            | { kind: "weekly"; time: string; weekday: number }
+            | { dayOfMonth: number | "last"; kind: "monthly"; time: string };
+          sourceTemplateId: null | string;
+          text: string;
+          timezone: string;
+          title: string;
+          updatedAt: number;
+        }>,
+        Name
+      >;
+      listPushTemplatesByCompany: FunctionReference<
+        "query",
+        "internal",
+        { companyId: string; includeDisabled?: boolean },
+        Array<{
+          _id: string;
+          companyId: string;
+          createdAt: number;
+          createdBy: string;
+          enabled: boolean;
+          periodicity: "manual" | "daily" | "weekly" | "monthly";
+          suggestedTimes: Array<
+            | { kind: "daily"; time: string }
+            | { kind: "weekly"; time: string; weekday: number }
+            | { dayOfMonth: number | "last"; kind: "monthly"; time: string }
+          >;
+          templateKey: string;
+          text: string;
+          title: string;
+          updatedAt: number;
+          updatedBy: string;
+        }>,
+        Name
+      >;
+      sendBroadcastToAllActiveAgents: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          companyId: string;
+          nowMs?: number;
+          requestedBy: string;
+          text: string;
+          title: string;
+        },
+        {
+          broadcastId: string;
+          enqueued: number;
+          failed: number;
+          totalTargets: number;
+        },
+        Name
+      >;
+      setPushJobEnabled: FunctionReference<
+        "mutation",
+        "internal",
+        { enabled: boolean; jobId: string; nowMs?: number },
+        boolean,
+        Name
+      >;
+      triggerPushJobNow: FunctionReference<
+        "mutation",
+        "internal",
+        { jobId: string; nowMs?: number },
+        { enqueuedMessageId: string; runKey: string },
+        Name
+      >;
+      updatePushJob: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          enabled?: boolean;
+          jobId: string;
+          nowMs?: number;
+          periodicity?: "manual" | "daily" | "weekly" | "monthly";
+          schedule?:
+            | { kind: "manual" }
+            | { kind: "daily"; time: string }
+            | { kind: "weekly"; time: string; weekday: number }
+            | { dayOfMonth: number | "last"; kind: "monthly"; time: string };
+          text?: string;
+          timezone?: string;
+          title?: string;
+        },
+        boolean,
+        Name
+      >;
+      updatePushTemplate: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          actorUserId: string;
+          enabled?: boolean;
+          nowMs?: number;
+          periodicity?: "manual" | "daily" | "weekly" | "monthly";
+          suggestedTimes?: Array<
+            | { kind: "daily"; time: string }
+            | { kind: "weekly"; time: string; weekday: number }
+            | { dayOfMonth: number | "last"; kind: "monthly"; time: string }
+          >;
+          templateId: string;
+          text?: string;
+          title?: string;
+        },
+        boolean,
+        Name
+      >;
     };
     queue: {
       appendConversationMessages: FunctionReference<

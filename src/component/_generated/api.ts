@@ -12,6 +12,7 @@ import type * as config from "../config.js";
 import type * as identity from "../identity.js";
 import type * as lib from "../lib.js";
 import type * as providers_fly from "../providers/fly.js";
+import type * as pushing from "../pushing.js";
 import type * as queue from "../queue.js";
 import type * as scheduler from "../scheduler.js";
 
@@ -27,6 +28,7 @@ const fullApi: ApiFromModules<{
   identity: typeof identity;
   lib: typeof lib;
   "providers/fly": typeof providers_fly;
+  pushing: typeof pushing;
   queue: typeof queue;
   scheduler: typeof scheduler;
 }> = anyApi as any;

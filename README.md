@@ -131,6 +131,32 @@ export default crons;
 
 This cron is a safety net. The primary path remains enqueue-triggered reconcile.
 
+### Agent pushing schedule (hourly dispatcher)
+
+For agent pushing, the recommended scheduler is an hourly cron that dispatches due jobs:
+
+```ts
+import { cronJobs } from "convex/server";
+import { api } from "./_generated/api";
+
+const crons = cronJobs();
+
+crons.cron(
+  "agent-factory push dispatch hourly",
+  "0 * * * *",
+  api.example.dispatchDuePushJobs,
+  {},
+);
+
+export default crons;
+```
+
+Important product constraint:
+- job configuration supports only fixed schedule slots (`HH:mm`, plus weekday/day-of-month)
+- minute-based recurrence ("every N minutes") is intentionally not supported
+
+Admin broadcast is also supported through `sendBroadcastToAllActiveAgents`, which enqueues one message per active target and records a dispatch audit.
+
 ### LLM configuration (Fly env)
 
 The model/provider is controlled by Fly worker environment variables (for example `OPENCLAW_AGENT_MODEL`, `MOONSHOT_API_KEY`, `OPENAI_API_KEY`) and applied at runtime by the worker image bootstrap.

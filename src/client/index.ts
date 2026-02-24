@@ -12,6 +12,50 @@ import {
   scalingPolicyValidator,
   type ProviderConfig,
 } from "../component/config.js";
+
+const pushPeriodicityValidator = v.union(
+  v.literal("manual"),
+  v.literal("daily"),
+  v.literal("weekly"),
+  v.literal("monthly"),
+);
+
+const pushSuggestedTimeValidator = v.union(
+  v.object({
+    kind: v.literal("daily"),
+    time: v.string(),
+  }),
+  v.object({
+    kind: v.literal("weekly"),
+    weekday: v.number(),
+    time: v.string(),
+  }),
+  v.object({
+    kind: v.literal("monthly"),
+    dayOfMonth: v.union(v.number(), v.literal("last")),
+    time: v.string(),
+  }),
+);
+
+const pushScheduleValidator = v.union(
+  v.object({
+    kind: v.literal("manual"),
+  }),
+  v.object({
+    kind: v.literal("daily"),
+    time: v.string(),
+  }),
+  v.object({
+    kind: v.literal("weekly"),
+    weekday: v.number(),
+    time: v.string(),
+  }),
+  v.object({
+    kind: v.literal("monthly"),
+    dayOfMonth: v.union(v.number(), v.literal("last")),
+    time: v.string(),
+  }),
+);
 export {
   bridgeFunctionKeyFromToolName,
   executeBridgeFunction,
@@ -461,6 +505,171 @@ export function exposeApi(
       handler: async (ctx, args) => {
         await options.auth(ctx, { type: "read" });
         return await ctx.runAction(component.lib.configureTelegramWebhook, args);
+      },
+    }),
+    createPushTemplate: mutationGeneric({
+      args: {
+        companyId: v.string(),
+        templateKey: v.string(),
+        title: v.string(),
+        text: v.string(),
+        periodicity: pushPeriodicityValidator,
+        suggestedTimes: v.array(pushSuggestedTimeValidator),
+        enabled: v.optional(v.boolean()),
+        actorUserId: v.string(),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "write" });
+        return await ctx.runMutation((component.lib as any).createPushTemplate, args);
+      },
+    }),
+    updatePushTemplate: mutationGeneric({
+      args: {
+        templateId: v.string(),
+        title: v.optional(v.string()),
+        text: v.optional(v.string()),
+        periodicity: v.optional(pushPeriodicityValidator),
+        suggestedTimes: v.optional(v.array(pushSuggestedTimeValidator)),
+        enabled: v.optional(v.boolean()),
+        actorUserId: v.string(),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "write" });
+        return await ctx.runMutation((component.lib as any).updatePushTemplate, args);
+      },
+    }),
+    deletePushTemplate: mutationGeneric({
+      args: {
+        templateId: v.string(),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "write" });
+        return await ctx.runMutation((component.lib as any).deletePushTemplate, args);
+      },
+    }),
+    listPushTemplatesByCompany: queryGeneric({
+      args: {
+        companyId: v.string(),
+        includeDisabled: v.optional(v.boolean()),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runQuery((component.lib as any).listPushTemplatesByCompany, args);
+      },
+    }),
+    createPushJobFromTemplate: mutationGeneric({
+      args: {
+        companyId: v.string(),
+        consumerUserId: v.string(),
+        templateId: v.string(),
+        timezone: v.string(),
+        schedule: v.optional(pushScheduleValidator),
+        enabled: v.optional(v.boolean()),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "write" });
+        return await ctx.runMutation((component.lib as any).createPushJobFromTemplate, args);
+      },
+    }),
+    createPushJobCustom: mutationGeneric({
+      args: {
+        companyId: v.string(),
+        consumerUserId: v.string(),
+        title: v.string(),
+        text: v.string(),
+        periodicity: pushPeriodicityValidator,
+        timezone: v.string(),
+        schedule: pushScheduleValidator,
+        enabled: v.optional(v.boolean()),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "write" });
+        return await ctx.runMutation((component.lib as any).createPushJobCustom, args);
+      },
+    }),
+    updatePushJob: mutationGeneric({
+      args: {
+        jobId: v.string(),
+        title: v.optional(v.string()),
+        text: v.optional(v.string()),
+        periodicity: v.optional(pushPeriodicityValidator),
+        timezone: v.optional(v.string()),
+        schedule: v.optional(pushScheduleValidator),
+        enabled: v.optional(v.boolean()),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "write" });
+        return await ctx.runMutation((component.lib as any).updatePushJob, args);
+      },
+    }),
+    deletePushJob: mutationGeneric({
+      args: {
+        jobId: v.string(),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "write" });
+        return await ctx.runMutation((component.lib as any).deletePushJob, args);
+      },
+    }),
+    setPushJobEnabled: mutationGeneric({
+      args: {
+        jobId: v.string(),
+        enabled: v.boolean(),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "write" });
+        return await ctx.runMutation((component.lib as any).setPushJobEnabled, args);
+      },
+    }),
+    listPushJobsForUser: queryGeneric({
+      args: {
+        consumerUserId: v.string(),
+        includeDisabled: v.optional(v.boolean()),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runQuery((component.lib as any).listPushJobsForUser, args);
+      },
+    }),
+    triggerPushJobNow: mutationGeneric({
+      args: {
+        jobId: v.string(),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "write" });
+        return await ctx.runMutation((component.lib as any).triggerPushJobNow, args);
+      },
+    }),
+    dispatchDuePushJobs: mutationGeneric({
+      args: {
+        nowMs: v.optional(v.number()),
+        limit: v.optional(v.number()),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "write" });
+        return await ctx.runMutation((component.lib as any).dispatchDuePushJobs, args);
+      },
+    }),
+    sendBroadcastToAllActiveAgents: mutationGeneric({
+      args: {
+        companyId: v.string(),
+        title: v.string(),
+        text: v.string(),
+        requestedBy: v.string(),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "write" });
+        return await ctx.runMutation((component.lib as any).sendBroadcastToAllActiveAgents, args);
+      },
+    }),
+    listPushDispatchesByJob: queryGeneric({
+      args: {
+        jobId: v.string(),
+        limit: v.optional(v.number()),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runQuery((component.lib as any).listPushDispatchesByJob, args);
       },
     }),
   };

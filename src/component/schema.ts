@@ -229,4 +229,140 @@ export default defineSchema({
   })
     .index("by_conversationId", ["conversationId"])
     .index("by_agentKey_and_lastHydratedAt", ["agentKey", "lastHydratedAt"]),
+
+  messagePushTemplates: defineTable({
+    companyId: v.string(),
+    templateKey: v.string(),
+    title: v.string(),
+    text: v.string(),
+    periodicity: v.union(
+      v.literal("manual"),
+      v.literal("daily"),
+      v.literal("weekly"),
+      v.literal("monthly"),
+    ),
+    suggestedTimes: v.array(
+      v.union(
+        v.object({
+          kind: v.literal("daily"),
+          time: v.string(),
+        }),
+        v.object({
+          kind: v.literal("weekly"),
+          weekday: v.number(),
+          time: v.string(),
+        }),
+        v.object({
+          kind: v.literal("monthly"),
+          dayOfMonth: v.union(v.number(), v.literal("last")),
+          time: v.string(),
+        }),
+      ),
+    ),
+    enabled: v.boolean(),
+    createdBy: v.string(),
+    updatedBy: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_companyId", ["companyId"])
+    .index("by_companyId_and_templateKey", ["companyId", "templateKey"])
+    .index("by_companyId_and_enabled", ["companyId", "enabled"]),
+
+  messagePushJobs: defineTable({
+    companyId: v.string(),
+    consumerUserId: v.string(),
+    agentKey: v.optional(v.string()),
+    sourceTemplateId: v.optional(v.id("messagePushTemplates")),
+    title: v.string(),
+    text: v.string(),
+    periodicity: v.union(
+      v.literal("manual"),
+      v.literal("daily"),
+      v.literal("weekly"),
+      v.literal("monthly"),
+    ),
+    timezone: v.string(),
+    schedule: v.union(
+      v.object({
+        kind: v.literal("manual"),
+      }),
+      v.object({
+        kind: v.literal("daily"),
+        time: v.string(),
+      }),
+      v.object({
+        kind: v.literal("weekly"),
+        weekday: v.number(),
+        time: v.string(),
+      }),
+      v.object({
+        kind: v.literal("monthly"),
+        dayOfMonth: v.union(v.number(), v.literal("last")),
+        time: v.string(),
+      }),
+    ),
+    enabled: v.boolean(),
+    nextRunAt: v.optional(v.number()),
+    lastRunAt: v.optional(v.number()),
+    lastRunKey: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_enabled_and_nextRunAt", ["enabled", "nextRunAt"])
+    .index("by_consumerUserId", ["consumerUserId"])
+    .index("by_consumerUserId_and_enabled", ["consumerUserId", "enabled"])
+    .index("by_companyId", ["companyId"])
+    .index("by_companyId_and_enabled", ["companyId", "enabled"])
+    .index("by_sourceTemplateId", ["sourceTemplateId"]),
+
+  messagePushDispatches: defineTable({
+    jobId: v.id("messagePushJobs"),
+    consumerUserId: v.string(),
+    runKey: v.string(),
+    scheduledFor: v.number(),
+    enqueuedMessageId: v.optional(v.id("messageQueue")),
+    status: v.union(
+      v.literal("enqueued"),
+      v.literal("skipped"),
+      v.literal("failed"),
+    ),
+    error: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_jobId_and_runKey", ["jobId", "runKey"])
+    .index("by_consumerUserId_and_createdAt", ["consumerUserId", "createdAt"]),
+
+  messagePushBroadcasts: defineTable({
+    companyId: v.string(),
+    title: v.string(),
+    text: v.string(),
+    target: v.literal("all_active_agents"),
+    requestedBy: v.string(),
+    requestedAt: v.number(),
+    status: v.union(v.literal("running"), v.literal("done"), v.literal("failed")),
+    totalTargets: v.number(),
+    enqueuedCount: v.number(),
+    failedCount: v.number(),
+    completedAt: v.optional(v.number()),
+  })
+    .index("by_companyId_and_requestedAt", ["companyId", "requestedAt"])
+    .index("by_status", ["status"]),
+
+  messagePushBroadcastDispatches: defineTable({
+    broadcastId: v.id("messagePushBroadcasts"),
+    consumerUserId: v.string(),
+    agentKey: v.string(),
+    runKey: v.string(),
+    enqueuedMessageId: v.optional(v.id("messageQueue")),
+    status: v.union(
+      v.literal("enqueued"),
+      v.literal("skipped"),
+      v.literal("failed"),
+    ),
+    error: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_broadcastId_and_consumerUserId", ["broadcastId", "consumerUserId"])
+    .index("by_broadcastId_and_createdAt", ["broadcastId", "createdAt"]),
 });

@@ -98,12 +98,25 @@ export const enqueueMessage = mutation({
       profile.providerUserId && profile.providerUserId.trim().length > 0
         ? profile.providerUserId.trim()
         : args.payload.providerUserId;
+
+    const providerUserIdStr =
+      typeof resolvedProviderUserId === "string" &&
+      resolvedProviderUserId.trim().length > 0
+        ? resolvedProviderUserId.trim()
+        : null;
+
+    if (providerUserIdStr === null) {
+      throw new Error(
+        `providerUserId is required but missing: profile.providerUserId=${JSON.stringify(profile.providerUserId)}, payload.providerUserId=${JSON.stringify(args.payload.providerUserId)}`,
+      );
+    }
+
     const payload = {
       ...args.payload,
-      providerUserId: resolvedProviderUserId,
+      providerUserId: providerUserIdStr,
       metadata: {
         ...(args.payload.metadata ?? {}),
-        providerUserId: resolvedProviderUserId,
+        providerUserId: providerUserIdStr,
       },
     };
 

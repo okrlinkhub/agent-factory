@@ -4,12 +4,19 @@ import { api } from "../convex/_generated/api";
 import { useState } from "react";
 
 function App() {
-  const enqueue = useMutation(api.example.enqueue);
   const seedDefaultAgent = useMutation(api.example.seedDefaultAgent);
   const seedExampleUsers = useMutation(api.example.seedExampleUsers);
   const importSecret = useMutation(api.example.importSecret);
   const bindUserAgent = useMutation(api.example.bindUserAgent);
   const createPairingCode = useMutation(api.example.createPairingCode);
+  const createPushTemplate = useMutation(api.example.createPushTemplate);
+  const listPushTemplates = useQuery(api.example.listPushTemplatesByCompany, {
+    companyId: "example-company",
+  });
+  const createPushJobFromTemplate = useMutation(api.example.createPushJobFromTemplate);
+  const triggerPushJobNow = useMutation(api.example.triggerPushJobNow);
+  const dispatchDuePushJobs = useMutation(api.example.dispatchDuePushJobs);
+  const sendBroadcastToAllActiveAgents = useMutation(api.example.sendBroadcastToAllActiveAgents);
   const startWorkers = useAction(api.example.startWorkers);
   const checkIdleShutdowns = useAction(api.example.checkIdleShutdowns);
   const deleteFlyVolume = useAction(api.example.deleteFlyVolume);
@@ -25,8 +32,6 @@ function App() {
     api.example.getPairingCodeStatus,
     latestPairingCode ? { code: latestPairingCode } : "skip",
   );
-  const [chatId, setChatId] = useState("947270381897662534");
-  const [messageText, setMessageText] = useState("Ciao da Telegram ingress");
   const [convexSecretUrl, setConvexSecretUrl] = useState(import.meta.env.VITE_CONVEX_URL ?? "");
   const [telegramBotToken, setTelegramBotToken] = useState("");
   const [flyApiToken, setFlyApiToken] = useState("");
@@ -38,6 +43,7 @@ function App() {
   const [idleShutdownResult, setIdleShutdownResult] = useState<string | null>(null);
   const [deleteVolumeResult, setDeleteVolumeResult] = useState<string | null>(null);
   const [pairingResult, setPairingResult] = useState<string | null>(null);
+  const [pushingResult, setPushingResult] = useState<string | null>(null);
   const [selectedUserId, setSelectedUserId] = useState("");
   const [bindingAgentKey, setBindingAgentKey] = useState("default");
   const [telegramBotUsername, setTelegramBotUsername] = useState("");
@@ -45,25 +51,24 @@ function App() {
   const [telegramChatIdForBinding, setTelegramChatIdForBinding] = useState("");
   const [flyAppNameForDelete, setFlyAppNameForDelete] = useState("openclaw-okr-image");
   const [flyVolumeIdForDelete, setFlyVolumeIdForDelete] = useState("");
+  const [pushCompanyId, setPushCompanyId] = useState("example-company");
+  const [pushTemplateKey, setPushTemplateKey] = useState("daily-check-template");
+  const [pushTemplateTitle, setPushTemplateTitle] = useState("Daily Check-in");
+  const [pushTemplateText, setPushTemplateText] = useState("Condividi il tuo aggiornamento della giornata.");
+  const [pushTemplateTime, setPushTemplateTime] = useState("09:00");
+  const [pushTimezone, setPushTimezone] = useState("Europe/Rome");
+  const [pushSelectedTemplateId, setPushSelectedTemplateId] = useState("");
+  const [pushJobTime, setPushJobTime] = useState("09:00");
+  const [broadcastTitle, setBroadcastTitle] = useState("Aggiornamento admin");
+  const [broadcastText, setBroadcastText] = useState("Nuove linee guida operative per tutti.");
+  const [selectedPushJobId, setSelectedPushJobId] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
+  const listPushJobsForUser = useQuery(
+    api.example.listPushJobsForUser,
+    selectedUserId ? { consumerUserId: selectedUserId, includeDisabled: true } : "skip",
+  );
   const convexUrl = import.meta.env.VITE_CONVEX_URL.replace(".cloud", ".site");
   const convexSecretStatus = (secretsStatus ?? []).find((item) => item.secretRef === "convex.url");
-
-  const enqueueMessage = async () => {
-    setBusy("enqueue");
-    try {
-      await enqueue({
-        conversationId: `telegram:${chatId}`,
-        agentKey: "default",
-        provider: "telegram",
-        providerUserId: chatId,
-        messageText,
-      });
-      setMessageText("");
-    } finally {
-      setBusy(null);
-    }
-  };
 
   const seedAgent = async () => {
     setBusy("seed");
@@ -199,6 +204,102 @@ function App() {
       );
     } catch (error) {
       setPairingResult((error as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const createTemplate = async () => {
+    setBusy("create-template");
+    setPushingResult(null);
+    try {
+      await createPushTemplate({
+        companyId: pushCompanyId,
+        templateKey: pushTemplateKey,
+        title: pushTemplateTitle,
+        text: pushTemplateText,
+        periodicity: "daily",
+        suggestedTimes: [{ kind: "daily", time: pushTemplateTime }],
+        actorUserId: "example-admin",
+      });
+      setPushingResult("Template creato/aggiornato correttamente.");
+    } catch (error) {
+      setPushingResult((error as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const createUserPushJob = async () => {
+    if (!selectedUserId || !pushSelectedTemplateId) return;
+    setBusy("create-job");
+    setPushingResult(null);
+    try {
+      const jobId = await createPushJobFromTemplate({
+        companyId: pushCompanyId,
+        consumerUserId: selectedUserId,
+        templateId: pushSelectedTemplateId as any,
+        timezone: pushTimezone,
+        schedule: { kind: "daily", time: pushJobTime },
+        enabled: true,
+      });
+      setSelectedPushJobId(jobId);
+      setPushingResult(`Job creato con timezone ${pushTimezone}.`);
+    } catch (error) {
+      setPushingResult((error as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const runManualPush = async () => {
+    if (!selectedPushJobId) return;
+    setBusy("manual-push");
+    setPushingResult(null);
+    try {
+      const result = await triggerPushJobNow({
+        jobId: selectedPushJobId as any,
+      });
+      setPushingResult(`Push manuale enqueue: ${result.enqueuedMessageId}.`);
+    } catch (error) {
+      setPushingResult((error as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const runDispatchNow = async () => {
+    setBusy("dispatch-now");
+    setPushingResult(null);
+    try {
+      const result = await dispatchDuePushJobs({
+        limit: 200,
+      });
+      setPushingResult(
+        `Dispatch completato: scanned=${result.scanned}, enqueued=${result.enqueued}, skipped=${result.skipped}, failed=${result.failed}.`,
+      );
+    } catch (error) {
+      setPushingResult((error as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const runBroadcast = async () => {
+    setBusy("broadcast");
+    setPushingResult(null);
+    try {
+      const result = await sendBroadcastToAllActiveAgents({
+        companyId: pushCompanyId,
+        title: broadcastTitle,
+        text: broadcastText,
+        requestedBy: "example-admin",
+      });
+      setPushingResult(
+        `Broadcast completato: targets=${result.totalTargets}, enqueued=${result.enqueued}, failed=${result.failed}.`,
+      );
+    } catch (error) {
+      setPushingResult((error as Error).message);
     } finally {
       setBusy(null);
     }
@@ -579,35 +680,139 @@ function App() {
             borderRadius: "8px",
           }}
         >
-          <h3>5) Queue Ingress Demo</h3>
+          <h3>5) Agent Pushing Demo (Template + Timezone + Manual + Broadcast)</h3>
           <p style={{ marginTop: 0, marginBottom: "0.75rem" }}>
-            Configure at least one agent profile before enqueueing messages.
+            Test completo della nuova implementazione: template, push orario con timezone, invio
+            manuale e broadcast admin.
           </p>
-          <div style={{ marginTop: "0.75rem" }}>
+          <div style={{ marginBottom: "0.75rem" }}>
             <input
-              value={chatId}
-              onChange={(event) => setChatId(event.target.value)}
-              placeholder="chat/user id"
-              style={{ marginRight: "0.5rem", padding: "0.5rem", width: "35%" }}
+              value={pushCompanyId}
+              onChange={(event) => setPushCompanyId(event.target.value)}
+              placeholder="companyId"
+              style={{ marginRight: "0.5rem", padding: "0.5rem", width: "28%" }}
             />
             <input
-              value={messageText}
-              onChange={(event) => setMessageText(event.target.value)}
-              placeholder="message text"
-              style={{ marginRight: "0.5rem", padding: "0.5rem", width: "45%" }}
+              value={pushTemplateKey}
+              onChange={(event) => setPushTemplateKey(event.target.value)}
+              placeholder="templateKey"
+              style={{ marginRight: "0.5rem", padding: "0.5rem", width: "28%" }}
+            />
+            <input
+              value={pushTemplateTime}
+              onChange={(event) => setPushTemplateTime(event.target.value)}
+              placeholder="HH:mm"
+              style={{ marginRight: "0.5rem", padding: "0.5rem", width: "18%" }}
             />
             <button
-              onClick={enqueueMessage}
-              disabled={busy !== null || messageText.trim().length === 0}
+              onClick={createTemplate}
+              disabled={busy !== null || pushTemplateKey.trim().length === 0}
             >
-              {busy === "enqueue" ? "Enqueue..." : "Enqueue message"}
+              {busy === "create-template" ? "Saving..." : "Create template"}
             </button>
           </div>
-          <p style={{ fontSize: "0.9rem", marginTop: "0.75rem" }}>
+          <div style={{ marginBottom: "0.75rem" }}>
+            <input
+              value={pushTemplateTitle}
+              onChange={(event) => setPushTemplateTitle(event.target.value)}
+              placeholder="template title"
+              style={{ marginRight: "0.5rem", padding: "0.5rem", width: "30%" }}
+            />
+            <input
+              value={pushTemplateText}
+              onChange={(event) => setPushTemplateText(event.target.value)}
+              placeholder="template text"
+              style={{ marginRight: "0.5rem", padding: "0.5rem", width: "62%" }}
+            />
+          </div>
+          <div style={{ marginBottom: "0.75rem" }}>
+            <select
+              value={pushSelectedTemplateId}
+              onChange={(event) => setPushSelectedTemplateId(event.target.value)}
+              style={{ marginRight: "0.5rem", padding: "0.5rem", width: "35%" }}
+            >
+              <option value="">Seleziona template</option>
+              {(listPushTemplates ?? []).map((template: any) => (
+                <option key={template._id} value={template._id}>
+                  {template.templateKey} ({template.title})
+                </option>
+              ))}
+            </select>
+            <select
+              value={pushTimezone}
+              onChange={(event) => setPushTimezone(event.target.value)}
+              style={{ marginRight: "0.5rem", padding: "0.5rem", width: "22%" }}
+            >
+              <option value="Europe/Rome">Europe/Rome</option>
+              <option value="America/New_York">America/New_York</option>
+              <option value="Asia/Tokyo">Asia/Tokyo</option>
+            </select>
+            <input
+              value={pushJobTime}
+              onChange={(event) => setPushJobTime(event.target.value)}
+              placeholder="job HH:mm"
+              style={{ marginRight: "0.5rem", padding: "0.5rem", width: "15%" }}
+            />
+            <button
+              onClick={createUserPushJob}
+              disabled={
+                busy !== null || selectedUserId.length === 0 || pushSelectedTemplateId.length === 0
+              }
+            >
+              {busy === "create-job" ? "Creating..." : "Create user push job"}
+            </button>
+          </div>
+          <div style={{ marginBottom: "0.75rem" }}>
+            <select
+              value={selectedPushJobId}
+              onChange={(event) => setSelectedPushJobId(event.target.value)}
+              style={{ marginRight: "0.5rem", padding: "0.5rem", width: "45%" }}
+            >
+              <option value="">Seleziona job per trigger manuale</option>
+              {(listPushJobsForUser ?? []).map((job: any) => (
+                <option key={job._id} value={job._id}>
+                  {job.title} ({job.timezone}) - {job.periodicity}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={runManualPush}
+              disabled={busy !== null || selectedPushJobId.length === 0}
+              style={{ marginRight: "0.5rem" }}
+            >
+              {busy === "manual-push" ? "Sending..." : "Trigger manual push"}
+            </button>
+            <button
+              onClick={runDispatchNow}
+              disabled={busy !== null}
+              style={{ marginRight: "0.5rem" }}
+            >
+              {busy === "dispatch-now" ? "Dispatching..." : "Dispatch due jobs now"}
+            </button>
+          </div>
+          <div style={{ marginBottom: "0.75rem" }}>
+            <input
+              value={broadcastTitle}
+              onChange={(event) => setBroadcastTitle(event.target.value)}
+              placeholder="broadcast title"
+              style={{ marginRight: "0.5rem", padding: "0.5rem", width: "30%" }}
+            />
+            <input
+              value={broadcastText}
+              onChange={(event) => setBroadcastText(event.target.value)}
+              placeholder="broadcast text"
+              style={{ marginRight: "0.5rem", padding: "0.5rem", width: "45%" }}
+            />
+            <button onClick={runBroadcast} disabled={busy !== null}>
+              {busy === "broadcast" ? "Broadcasting..." : "Admin broadcast to all active agents"}
+            </button>
+          </div>
+          <p style={{ fontSize: "0.9rem", marginTop: "0.5rem", marginBottom: "0.5rem" }}>
             Queue ready: <strong>{stats?.queuedReady ?? 0}</strong> | Processing:{" "}
             <strong>{stats?.processing ?? 0}</strong> | Dead letter:{" "}
             <strong>{stats?.deadLetter ?? 0}</strong>
           </p>
+          {pushingResult ? <p style={{ marginTop: "0.5rem" }}>{pushingResult}</p> : null}
         </div>
         <div
           style={{

@@ -456,4 +456,102 @@ describe("component lib", () => {
     expect(reconcile.spawned).toBe(0);
     expect(reconcile.terminated).toBe(0);
   });
+
+  test("push jobs should dispatch scheduled messages and log runs", async () => {
+    const t = initConvexTest();
+    await t.mutation(api.queue.upsertAgentProfile, {
+      agentKey: "push-agent",
+      version: "1.0.0",
+      soulMd: "# Soul",
+      clientMd: "# Client",
+      skills: [],
+      secretsRef: [],
+      enabled: true,
+    });
+    await t.mutation(api.lib.bindUserAgent, {
+      consumerUserId: "user-push-1",
+      agentKey: "push-agent",
+      source: "manual",
+      metadata: { companyId: "co-1" },
+    });
+
+    const baseMs = Date.UTC(2026, 0, 1, 7, 59, 0);
+    const jobId = await t.mutation((api.lib as any).createPushJobCustom, {
+      companyId: "co-1",
+      consumerUserId: "user-push-1",
+      title: "Daily check",
+      text: "Ping automatico",
+      periodicity: "daily",
+      timezone: "UTC",
+      schedule: {
+        kind: "daily",
+        time: "08:00",
+      },
+      nowMs: baseMs,
+    });
+
+    const dispatch = await t.mutation((api.lib as any).dispatchDuePushJobs, {
+      nowMs: baseMs + 6 * 60_000,
+      limit: 50,
+    });
+    expect(dispatch.enqueued).toBe(1);
+    expect(dispatch.failed).toBe(0);
+
+    const queueStats = await t.query(api.lib.queueStats, {});
+    expect(queueStats.queuedReady).toBe(1);
+
+    const jobDispatches = await t.query((api.lib as any).listPushDispatchesByJob, {
+      jobId,
+      limit: 10,
+    });
+    expect(jobDispatches.length).toBe(1);
+    expect(jobDispatches[0].status).toBe("enqueued");
+  });
+
+  test("admin broadcast should enqueue to all active company agents", async () => {
+    const t = initConvexTest();
+    await t.mutation(api.queue.upsertAgentProfile, {
+      agentKey: "broadcast-agent-a",
+      version: "1.0.0",
+      soulMd: "# Soul",
+      clientMd: "# Client",
+      skills: [],
+      secretsRef: [],
+      enabled: true,
+    });
+    await t.mutation(api.queue.upsertAgentProfile, {
+      agentKey: "broadcast-agent-b",
+      version: "1.0.0",
+      soulMd: "# Soul",
+      clientMd: "# Client",
+      skills: [],
+      secretsRef: [],
+      enabled: true,
+    });
+    await t.mutation(api.lib.bindUserAgent, {
+      consumerUserId: "company-user-a",
+      agentKey: "broadcast-agent-a",
+      source: "manual",
+      metadata: { companyId: "company-broadcast" },
+    });
+    await t.mutation(api.lib.bindUserAgent, {
+      consumerUserId: "company-user-b",
+      agentKey: "broadcast-agent-b",
+      source: "manual",
+      metadata: { companyId: "company-broadcast" },
+    });
+
+    const result = await t.mutation((api.lib as any).sendBroadcastToAllActiveAgents, {
+      companyId: "company-broadcast",
+      title: "Aggiornamento policy",
+      text: "Sincronizza le nuove istruzioni",
+      requestedBy: "admin-1",
+    });
+    expect(result.totalTargets).toBe(2);
+    expect(result.enqueued).toBe(2);
+    expect(result.failed).toBe(0);
+
+    const queueStats = await t.query(api.lib.queueStats, {});
+    expect(queueStats.queuedReady).toBe(2);
+  });
 });

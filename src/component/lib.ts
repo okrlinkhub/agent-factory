@@ -34,3 +34,20 @@ export {
   consumePairingCode,
   getPairingCodeStatus,
 } from "./identity.js";
+
+export {
+  createPushTemplate,
+  updatePushTemplate,
+  deletePushTemplate,
+  listPushTemplatesByCompany,
+  createPushJobFromTemplate,
+  createPushJobCustom,
+  updatePushJob,
+  deletePushJob,
+  setPushJobEnabled,
+  listPushJobsForUser,
+  triggerPushJobNow,
+  dispatchDuePushJobs,
+  sendBroadcastToAllActiveAgents,
+  listPushDispatchesByJob,
+} from "./pushing.js";
