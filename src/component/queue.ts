@@ -100,6 +100,7 @@ export const enqueueMessage = mutation({
         : args.payload.providerUserId;
     const payload = {
       ...args.payload,
+      providerUserId: resolvedProviderUserId,
       metadata: {
         ...(args.payload.metadata ?? {}),
         providerUserId: resolvedProviderUserId,
