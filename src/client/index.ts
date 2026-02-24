@@ -95,7 +95,7 @@ export function exposeApi(
       args: {},
       handler: async (ctx) => {
         await options.auth(ctx, { type: "read" });
-        return await ctx.runQuery((component.queue as any).getProviderRuntimeConfig, {});
+        return await ctx.runQuery((component.queue as any).providerRuntimeConfig, {});
       },
     }),
     setProviderRuntimeConfig: mutationGeneric({
@@ -104,7 +104,7 @@ export function exposeApi(
       },
       handler: async (ctx, args) => {
         await options.auth(ctx, { type: "write" });
-        await ctx.runMutation((component.queue as any).upsertProviderRuntimeConfig, args);
+        await ctx.runMutation((component.queue as any).setProviderRuntimeConfig, args);
         return null;
       },
     }),

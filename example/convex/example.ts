@@ -145,7 +145,7 @@ export const getProviderRuntimeConfig = query({
   returns: v.union(v.null(), providerRuntimeConfigValidator),
   handler: async (ctx) => {
     await getAuthUserId(ctx);
-    return await ctx.runQuery((components.agentFactory.queue as any).getProviderRuntimeConfig, {});
+    return await ctx.runQuery((components.agentFactory.queue as any).providerRuntimeConfig, {});
   },
 });
 
@@ -156,7 +156,7 @@ export const setProviderRuntimeConfig = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     await getAuthUserId(ctx);
-    await ctx.runMutation((components.agentFactory.queue as any).upsertProviderRuntimeConfig, {
+    await ctx.runMutation((components.agentFactory.queue as any).setProviderRuntimeConfig, {
       providerConfig: args.providerConfig,
     });
     return null;
