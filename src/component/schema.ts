@@ -222,6 +222,51 @@ export default defineSchema({
     .index("by_consumerUserId_and_status", ["consumerUserId", "status"])
     .index("by_expiresAt", ["expiresAt"]),
 
+  globalSkills: defineTable({
+    slug: v.string(),
+    displayName: v.string(),
+    description: v.optional(v.string()),
+    status: v.union(v.literal("active"), v.literal("disabled")),
+    createdBy: v.string(),
+    updatedBy: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_slug", ["slug"])
+    .index("by_status", ["status"]),
+
+  globalSkillVersions: defineTable({
+    skillId: v.id("globalSkills"),
+    version: v.string(),
+    moduleFormat: v.union(v.literal("esm"), v.literal("cjs")),
+    entryPoint: v.string(),
+    sourceJs: v.string(),
+    sha256: v.string(),
+    createdBy: v.string(),
+    createdAt: v.number(),
+  })
+    .index("by_skillId_and_version", ["skillId", "version"])
+    .index("by_skillId_and_createdAt", ["skillId", "createdAt"]),
+
+  globalSkillReleases: defineTable({
+    skillId: v.id("globalSkills"),
+    versionId: v.id("globalSkillVersions"),
+    releaseChannel: v.union(v.literal("stable"), v.literal("canary")),
+    isActive: v.boolean(),
+    activatedBy: v.string(),
+    activatedAt: v.number(),
+  })
+    .index("by_skillId_and_releaseChannel_and_isActive", [
+      "skillId",
+      "releaseChannel",
+      "isActive",
+    ])
+    .index("by_releaseChannel_and_isActive_and_activatedAt", [
+      "releaseChannel",
+      "isActive",
+      "activatedAt",
+    ]),
+
   conversationHydrationCache: defineTable({
     conversationId: v.string(),
     agentKey: v.string(),

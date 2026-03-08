@@ -1264,6 +1264,44 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         boolean,
         Name
       >;
+      deleteGlobalSkill: FunctionReference<
+        "mutation",
+        "internal",
+        { slug: string },
+        {
+          deleted: boolean;
+          deletedReleases: number;
+          deletedVersions: number;
+          slug: string;
+        },
+        Name
+      >;
+      deployGlobalSkill: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          actor?: string;
+          description?: string;
+          displayName?: string;
+          entryPoint?: string;
+          moduleFormat?: "esm" | "cjs";
+          nowMs?: number;
+          releaseChannel?: "stable" | "canary";
+          slug: string;
+          sourceJs: string;
+          version: string;
+        },
+        {
+          releaseChannel: "stable" | "canary";
+          releaseId: string;
+          sha256: string;
+          skillId: string;
+          slug: string;
+          version: string;
+          versionId: string;
+        },
+        Name
+      >;
       enqueueMessage: FunctionReference<
         "mutation",
         "internal",
@@ -1441,6 +1479,30 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         { shouldStop: boolean },
         Name
       >;
+      getWorkerGlobalSkillsManifest: FunctionReference<
+        "query",
+        "internal",
+        {
+          releaseChannel?: "stable" | "canary";
+          workerId?: string;
+          workspaceId?: string;
+        },
+        {
+          generatedAt: number;
+          manifestVersion: string;
+          releaseChannel: "stable" | "canary";
+          skills: Array<{
+            entryPoint: string;
+            moduleFormat: "esm" | "cjs";
+            sha256: string;
+            slug: string;
+            sourceJs: string;
+            version: string;
+          }>;
+          workspaceId: string;
+        },
+        Name
+      >;
       getWorkerStats: FunctionReference<
         "query",
         "internal",
@@ -1487,6 +1549,34 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           secretRef: string;
         },
         { secretId: string; secretRef: string; version: number },
+        Name
+      >;
+      listGlobalSkills: FunctionReference<
+        "query",
+        "internal",
+        {
+          limit?: number;
+          releaseChannel?: "stable" | "canary";
+          status?: "active" | "disabled";
+        },
+        Array<{
+          activeRelease: null | {
+            activatedAt: number;
+            entryPoint: string;
+            moduleFormat: "esm" | "cjs";
+            releaseChannel: "stable" | "canary";
+            releaseId: string;
+            sha256: string;
+            version: string;
+            versionId: string;
+          };
+          description?: string;
+          displayName: string;
+          skillId: string;
+          slug: string;
+          status: "active" | "disabled";
+          updatedAt: number;
+        }>,
         Name
       >;
       listJobsByStatus: FunctionReference<
@@ -1545,6 +1635,18 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "internal",
         { limit?: number; nowMs?: number },
         { requeued: number; unlocked: number },
+        Name
+      >;
+      setGlobalSkillStatus: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          actor?: string;
+          nowMs?: number;
+          slug: string;
+          status: "active" | "disabled";
+        },
+        { slug: string; status: "active" | "disabled"; updated: boolean },
         Name
       >;
       setProviderRuntimeConfig: FunctionReference<

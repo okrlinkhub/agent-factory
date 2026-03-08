@@ -211,6 +211,10 @@ export const {
   dispatchDuePushJobs,
   sendBroadcastToAllActiveAgents,
   listPushDispatchesByJob,
+  globalSkillsDeploy,
+  globalSkillsList,
+  globalSkillsSetStatus,
+  globalSkillsDelete,
 } = exposeApi(components.agentFactory, {
   providerConfig: EXAMPLE_PROVIDER_CONFIG,
   auth: async (ctx, operation) => {

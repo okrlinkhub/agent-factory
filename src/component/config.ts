@@ -77,6 +77,11 @@ export const DEFAULT_WORKER_RUNTIME_ENV: Record<string, string> = {
   OPENCLAW_GATEWAY_READY_TIMEOUT_MS: "60000",
   OPENCLAW_GATEWAY_READY_POLL_MS: "500",
   OPENCLAW_GATEWAY_READY_REQUIRED: "true",
+  SKILLS_BOOTSTRAP_MODE: "db_manifest",
+  SKILLS_BOOTSTRAP_REQUIRED: "false",
+  SKILLS_BOOTSTRAP_TIMEOUT_MS: "15000",
+  SKILLS_RELEASE_CHANNEL: "stable",
+  OPENCLAW_SKILLS_DIR: "/data/workspace/skills",
 };
 
 export const queuePolicyValidator = v.object({

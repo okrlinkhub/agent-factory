@@ -211,6 +211,17 @@ export function exposeApi(
         return await ctx.runQuery(component.queue.getHydrationBundleForClaimedJob, args);
       },
     }),
+    workerGlobalSkillsManifest: queryGeneric({
+      args: {
+        workspaceId: v.optional(v.string()),
+        workerId: v.optional(v.string()),
+        releaseChannel: v.optional(v.union(v.literal("stable"), v.literal("canary"))),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runQuery((component.queue as any).getWorkerGlobalSkillsManifest, args);
+      },
+    }),
     workerConversationHasQueued: queryGeneric({
       args: {
         conversationId: v.string(),
@@ -323,6 +334,54 @@ export function exposeApi(
       handler: async (ctx, args) => {
         await options.auth(ctx, { type: "write" });
         return await ctx.runMutation((component.queue as any).attachMessageMetadata, args);
+      },
+    }),
+    globalSkillsDeploy: mutationGeneric({
+      args: {
+        slug: v.string(),
+        displayName: v.optional(v.string()),
+        description: v.optional(v.string()),
+        version: v.string(),
+        sourceJs: v.string(),
+        entryPoint: v.optional(v.string()),
+        moduleFormat: v.optional(v.union(v.literal("esm"), v.literal("cjs"))),
+        releaseChannel: v.optional(v.union(v.literal("stable"), v.literal("canary"))),
+        actor: v.optional(v.string()),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "write" });
+        return await ctx.runMutation((component.queue as any).deployGlobalSkill, args);
+      },
+    }),
+    globalSkillsList: queryGeneric({
+      args: {
+        releaseChannel: v.optional(v.union(v.literal("stable"), v.literal("canary"))),
+        status: v.optional(v.union(v.literal("active"), v.literal("disabled"))),
+        limit: v.optional(v.number()),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runQuery((component.queue as any).listGlobalSkills, args);
+      },
+    }),
+    globalSkillsSetStatus: mutationGeneric({
+      args: {
+        slug: v.string(),
+        status: v.union(v.literal("active"), v.literal("disabled")),
+        actor: v.optional(v.string()),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "write" });
+        return await ctx.runMutation((component.queue as any).setGlobalSkillStatus, args);
+      },
+    }),
+    globalSkillsDelete: mutationGeneric({
+      args: {
+        slug: v.string(),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "write" });
+        return await ctx.runMutation((component.queue as any).deleteGlobalSkill, args);
       },
     }),
     seedDefaultAgent: mutationGeneric({

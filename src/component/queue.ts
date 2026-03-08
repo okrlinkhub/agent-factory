@@ -65,6 +65,19 @@ const bridgeRuntimeConfigValidator = v.object({
   serviceKeySecretRef: v.union(v.null(), v.string()),
 });
 
+const globalSkillStatusValidator = v.union(v.literal("active"), v.literal("disabled"));
+const globalSkillReleaseChannelValidator = v.union(v.literal("stable"), v.literal("canary"));
+const globalSkillModuleFormatValidator = v.union(v.literal("esm"), v.literal("cjs"));
+
+const globalSkillManifestItemValidator = v.object({
+  slug: v.string(),
+  version: v.string(),
+  moduleFormat: globalSkillModuleFormatValidator,
+  entryPoint: v.string(),
+  sourceJs: v.string(),
+  sha256: v.string(),
+});
+
 const BRIDGE_SECRET_REFS = {
   serviceKey: "agent-bridge.serviceKey",
   baseUrl: "agent-bridge.baseUrl",
@@ -442,6 +455,411 @@ export const setProviderRuntimeConfig = mutation({
       updatedAt: nowMs,
     });
     return null;
+  },
+});
+
+export const deployGlobalSkill = mutation({
+  args: {
+    slug: v.string(),
+    displayName: v.optional(v.string()),
+    description: v.optional(v.string()),
+    version: v.string(),
+    sourceJs: v.string(),
+    entryPoint: v.optional(v.string()),
+    moduleFormat: v.optional(globalSkillModuleFormatValidator),
+    releaseChannel: v.optional(globalSkillReleaseChannelValidator),
+    actor: v.optional(v.string()),
+    nowMs: v.optional(v.number()),
+  },
+  returns: v.object({
+    skillId: v.id("globalSkills"),
+    versionId: v.id("globalSkillVersions"),
+    releaseId: v.id("globalSkillReleases"),
+    slug: v.string(),
+    version: v.string(),
+    sha256: v.string(),
+    releaseChannel: globalSkillReleaseChannelValidator,
+  }),
+  handler: async (ctx, args) => {
+    const nowMs = args.nowMs ?? Date.now();
+    const slug = args.slug.trim().toLowerCase();
+    const version = args.version.trim();
+    const entryPoint = (args.entryPoint ?? "default").trim();
+    const releaseChannel = args.releaseChannel ?? "stable";
+    const moduleFormat = args.moduleFormat ?? "esm";
+    const actor = args.actor?.trim() || "system";
+    const sourceJs = args.sourceJs.trim();
+
+    if (!/^[a-z0-9][a-z0-9-_]{1,127}$/.test(slug)) {
+      throw new Error("Invalid skill slug. Use lowercase letters, numbers, '-' and '_'.");
+    }
+    if (!/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(version)) {
+      throw new Error("Invalid skill version. Use semantic versioning format.");
+    }
+    if (sourceJs.length < 16) {
+      throw new Error("Skill source is too short.");
+    }
+    if (sourceJs.length > 200_000) {
+      throw new Error("Skill source too large (max 200KB).");
+    }
+    if (!entryPoint) {
+      throw new Error("entryPoint is required.");
+    }
+
+    const sha256 = await computeSha256Hex(sourceJs);
+
+    const existingSkill = await ctx.db
+      .query("globalSkills")
+      .withIndex("by_slug", (q) => q.eq("slug", slug))
+      .unique();
+    const skillId =
+      existingSkill?._id ??
+      (await ctx.db.insert("globalSkills", {
+        slug,
+        displayName: args.displayName?.trim() || slug,
+        description: args.description?.trim(),
+        status: "active",
+        createdBy: actor,
+        updatedBy: actor,
+        createdAt: nowMs,
+        updatedAt: nowMs,
+      }));
+
+    if (existingSkill) {
+      await ctx.db.patch(skillId, {
+        displayName: args.displayName?.trim() || existingSkill.displayName,
+        description:
+          args.description !== undefined ? args.description.trim() : existingSkill.description,
+        status: "active",
+        updatedBy: actor,
+        updatedAt: nowMs,
+      });
+    }
+
+    const existingVersion = await ctx.db
+      .query("globalSkillVersions")
+      .withIndex("by_skillId_and_version", (q) => q.eq("skillId", skillId).eq("version", version))
+      .unique();
+
+    let versionId = existingVersion?._id;
+    if (!existingVersion) {
+      versionId = await ctx.db.insert("globalSkillVersions", {
+        skillId,
+        version,
+        moduleFormat,
+        entryPoint,
+        sourceJs,
+        sha256,
+        createdBy: actor,
+        createdAt: nowMs,
+      });
+    } else if (existingVersion.sha256 !== sha256) {
+      throw new Error(`Skill ${slug}@${version} already exists with a different source.`);
+    }
+
+    const activeReleases = await ctx.db
+      .query("globalSkillReleases")
+      .withIndex("by_skillId_and_releaseChannel_and_isActive", (q) =>
+        q.eq("skillId", skillId).eq("releaseChannel", releaseChannel).eq("isActive", true),
+      )
+      .collect();
+    for (const release of activeReleases) {
+      await ctx.db.patch(release._id, { isActive: false });
+    }
+
+    const releaseId = await ctx.db.insert("globalSkillReleases", {
+      skillId,
+      versionId: versionId!,
+      releaseChannel,
+      isActive: true,
+      activatedBy: actor,
+      activatedAt: nowMs,
+    });
+
+    return {
+      skillId,
+      versionId: versionId!,
+      releaseId,
+      slug,
+      version,
+      sha256,
+      releaseChannel,
+    };
+  },
+});
+
+export const listGlobalSkills = query({
+  args: {
+    releaseChannel: v.optional(globalSkillReleaseChannelValidator),
+    status: v.optional(globalSkillStatusValidator),
+    limit: v.optional(v.number()),
+  },
+  returns: v.array(
+    v.object({
+      skillId: v.id("globalSkills"),
+      slug: v.string(),
+      displayName: v.string(),
+      description: v.optional(v.string()),
+      status: globalSkillStatusValidator,
+      updatedAt: v.number(),
+      activeRelease: v.union(
+        v.null(),
+        v.object({
+          releaseId: v.id("globalSkillReleases"),
+          versionId: v.id("globalSkillVersions"),
+          version: v.string(),
+          sha256: v.string(),
+          moduleFormat: globalSkillModuleFormatValidator,
+          entryPoint: v.string(),
+          releaseChannel: globalSkillReleaseChannelValidator,
+          activatedAt: v.number(),
+        }),
+      ),
+    }),
+  ),
+  handler: async (ctx, args) => {
+    const releaseChannel = args.releaseChannel ?? "stable";
+    const limit = Math.max(1, Math.min(args.limit ?? 200, 500));
+    const skills =
+      args.status !== undefined
+        ? await ctx.db
+            .query("globalSkills")
+            .withIndex("by_status", (q) => q.eq("status", args.status!))
+            .take(limit)
+        : await ctx.db.query("globalSkills").take(limit);
+
+    const sortedSkills = [...skills].sort((a, b) => a.slug.localeCompare(b.slug));
+    const out: Array<{
+      skillId: any;
+      slug: string;
+      displayName: string;
+      description?: string;
+      status: "active" | "disabled";
+      updatedAt: number;
+      activeRelease: {
+        releaseId: any;
+        versionId: any;
+        version: string;
+        sha256: string;
+        moduleFormat: "esm" | "cjs";
+        entryPoint: string;
+        releaseChannel: "stable" | "canary";
+        activatedAt: number;
+      } | null;
+    }> = [];
+
+    for (const skill of sortedSkills) {
+      const activeRelease = await ctx.db
+        .query("globalSkillReleases")
+        .withIndex("by_skillId_and_releaseChannel_and_isActive", (q) =>
+          q.eq("skillId", skill._id).eq("releaseChannel", releaseChannel).eq("isActive", true),
+        )
+        .first();
+
+      let activeReleaseRow: (typeof out)[number]["activeRelease"] = null;
+      if (activeRelease) {
+        const version = await ctx.db.get(activeRelease.versionId);
+        if (version) {
+          activeReleaseRow = {
+            releaseId: activeRelease._id,
+            versionId: version._id,
+            version: version.version,
+            sha256: version.sha256,
+            moduleFormat: version.moduleFormat,
+            entryPoint: version.entryPoint,
+            releaseChannel: activeRelease.releaseChannel,
+            activatedAt: activeRelease.activatedAt,
+          };
+        }
+      }
+
+      out.push({
+        skillId: skill._id,
+        slug: skill.slug,
+        displayName: skill.displayName,
+        description: skill.description,
+        status: skill.status,
+        updatedAt: skill.updatedAt,
+        activeRelease: activeReleaseRow,
+      });
+    }
+    return out;
+  },
+});
+
+export const getWorkerGlobalSkillsManifest = query({
+  args: {
+    workspaceId: v.optional(v.string()),
+    workerId: v.optional(v.string()),
+    releaseChannel: v.optional(globalSkillReleaseChannelValidator),
+  },
+  returns: v.object({
+    manifestVersion: v.string(),
+    generatedAt: v.number(),
+    releaseChannel: globalSkillReleaseChannelValidator,
+    workspaceId: v.string(),
+    skills: v.array(globalSkillManifestItemValidator),
+  }),
+  handler: async (ctx, args) => {
+    const nowMs = Date.now();
+    const releaseChannel = args.releaseChannel ?? "stable";
+    const activeSkills = await ctx.db
+      .query("globalSkills")
+      .withIndex("by_status", (q) => q.eq("status", "active"))
+      .collect();
+    const sortedSkills = [...activeSkills].sort((a, b) => a.slug.localeCompare(b.slug));
+
+    const manifestSkills: Array<{
+      slug: string;
+      version: string;
+      moduleFormat: "esm" | "cjs";
+      entryPoint: string;
+      sourceJs: string;
+      sha256: string;
+    }> = [];
+
+    for (const skill of sortedSkills) {
+      const activeRelease = await ctx.db
+        .query("globalSkillReleases")
+        .withIndex("by_skillId_and_releaseChannel_and_isActive", (q) =>
+          q.eq("skillId", skill._id).eq("releaseChannel", releaseChannel).eq("isActive", true),
+        )
+        .first();
+      if (!activeRelease) continue;
+
+      const version = await ctx.db.get(activeRelease.versionId);
+      if (!version) continue;
+      manifestSkills.push({
+        slug: skill.slug,
+        version: version.version,
+        moduleFormat: version.moduleFormat,
+        entryPoint: version.entryPoint,
+        sourceJs: version.sourceJs,
+        sha256: version.sha256,
+      });
+    }
+
+    manifestSkills.sort((a, b) => {
+      if (a.slug !== b.slug) return a.slug.localeCompare(b.slug);
+      return a.version.localeCompare(b.version);
+    });
+
+    const fingerprintSeed = manifestSkills
+      .map((row) => `${row.slug}@${row.version}:${row.sha256}`)
+      .join("|");
+    const manifestVersion = await computeSha256Hex(fingerprintSeed || "empty");
+
+    return {
+      manifestVersion,
+      generatedAt: nowMs,
+      releaseChannel,
+      workspaceId: args.workspaceId ?? "default",
+      skills: manifestSkills,
+    };
+  },
+});
+
+export const setGlobalSkillStatus = mutation({
+  args: {
+    slug: v.string(),
+    status: globalSkillStatusValidator,
+    actor: v.optional(v.string()),
+    nowMs: v.optional(v.number()),
+  },
+  returns: v.object({
+    updated: v.boolean(),
+    slug: v.string(),
+    status: globalSkillStatusValidator,
+  }),
+  handler: async (ctx, args) => {
+    const slug = args.slug.trim().toLowerCase();
+    const nowMs = args.nowMs ?? Date.now();
+    const actor = args.actor?.trim() || "system";
+    const skill = await ctx.db
+      .query("globalSkills")
+      .withIndex("by_slug", (q) => q.eq("slug", slug))
+      .unique();
+    if (!skill) {
+      return { updated: false, slug, status: args.status };
+    }
+    await ctx.db.patch(skill._id, {
+      status: args.status,
+      updatedBy: actor,
+      updatedAt: nowMs,
+    });
+    return { updated: true, slug, status: args.status };
+  },
+});
+
+export const deleteGlobalSkill = mutation({
+  args: {
+    slug: v.string(),
+  },
+  returns: v.object({
+    deleted: v.boolean(),
+    slug: v.string(),
+    deletedVersions: v.number(),
+    deletedReleases: v.number(),
+  }),
+  handler: async (ctx, args) => {
+    const slug = args.slug.trim().toLowerCase();
+    const skill = await ctx.db
+      .query("globalSkills")
+      .withIndex("by_slug", (q) => q.eq("slug", slug))
+      .unique();
+    if (!skill) {
+      return { deleted: false, slug, deletedVersions: 0, deletedReleases: 0 };
+    }
+
+    const stableActiveReleases = await ctx.db
+      .query("globalSkillReleases")
+      .withIndex("by_skillId_and_releaseChannel_and_isActive", (q) =>
+        q.eq("skillId", skill._id).eq("releaseChannel", "stable").eq("isActive", true),
+      )
+      .collect();
+    const stableInactiveReleases = await ctx.db
+      .query("globalSkillReleases")
+      .withIndex("by_skillId_and_releaseChannel_and_isActive", (q) =>
+        q.eq("skillId", skill._id).eq("releaseChannel", "stable").eq("isActive", false),
+      )
+      .collect();
+    const canaryActiveReleases = await ctx.db
+      .query("globalSkillReleases")
+      .withIndex("by_skillId_and_releaseChannel_and_isActive", (q) =>
+        q.eq("skillId", skill._id).eq("releaseChannel", "canary").eq("isActive", true),
+      )
+      .collect();
+    const canaryInactiveReleases = await ctx.db
+      .query("globalSkillReleases")
+      .withIndex("by_skillId_and_releaseChannel_and_isActive", (q) =>
+        q.eq("skillId", skill._id).eq("releaseChannel", "canary").eq("isActive", false),
+      )
+      .collect();
+    const allReleases = [
+      ...stableActiveReleases,
+      ...stableInactiveReleases,
+      ...canaryActiveReleases,
+      ...canaryInactiveReleases,
+    ];
+    const versions = await ctx.db
+      .query("globalSkillVersions")
+      .withIndex("by_skillId_and_createdAt", (q) => q.eq("skillId", skill._id))
+      .collect();
+
+    for (const release of allReleases) {
+      await ctx.db.delete(release._id);
+    }
+    for (const version of versions) {
+      await ctx.db.delete(version._id);
+    }
+    await ctx.db.delete(skill._id);
+
+    return {
+      deleted: true,
+      slug,
+      deletedVersions: versions.length,
+      deletedReleases: allReleases.length,
+    };
   },
 });
 
@@ -1686,6 +2104,14 @@ function fingerprintConversationDelta(
     hash = Math.imul(hash, 16777619);
   }
   return `f${(hash >>> 0).toString(16)}`;
+}
+
+async function computeSha256Hex(input: string): Promise<string> {
+  const bytes = new TextEncoder().encode(input);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((value) => value.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 function encryptSecretValue(plaintext: string): string {

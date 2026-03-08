@@ -17,6 +17,13 @@ function App() {
   const triggerPushJobNow = useMutation(api.example.triggerPushJobNow);
   const dispatchDuePushJobs = useMutation(api.example.dispatchDuePushJobs);
   const sendBroadcastToAllActiveAgents = useMutation(api.example.sendBroadcastToAllActiveAgents);
+  const globalSkillsDeploy = useMutation(api.example.globalSkillsDeploy);
+  const globalSkillsSetStatus = useMutation(api.example.globalSkillsSetStatus);
+  const globalSkillsDelete = useMutation(api.example.globalSkillsDelete);
+  const globalSkillsList = useQuery(api.example.globalSkillsList, {
+    releaseChannel: "stable",
+    limit: 200,
+  });
   const startWorkers = useAction(api.example.startWorkers);
   const checkIdleShutdowns = useAction(api.example.checkIdleShutdowns);
   const deleteFlyVolume = useAction(api.example.deleteFlyVolume);
@@ -75,6 +82,17 @@ function App() {
   const [broadcastTitle, setBroadcastTitle] = useState("Aggiornamento admin");
   const [broadcastText, setBroadcastText] = useState("Nuove linee guida operative per tutti.");
   const [selectedPushJobId, setSelectedPushJobId] = useState("");
+  const [skillSlug, setSkillSlug] = useState("demo-skill");
+  const [skillVersion, setSkillVersion] = useState("1.0.0");
+  const [skillDisplayName, setSkillDisplayName] = useState("Demo Skill");
+  const [skillDescription, setSkillDescription] = useState("Skill di test CRUD dal pannello example.");
+  const [skillEntryPoint, setSkillEntryPoint] = useState("default");
+  const [skillModuleFormat, setSkillModuleFormat] = useState<"esm" | "cjs">("esm");
+  const [skillSourceJs, setSkillSourceJs] = useState(
+    "export default async function main(context, input) { return { ok: true, input }; }",
+  );
+  const [selectedSkillSlug, setSelectedSkillSlug] = useState("");
+  const [skillsCrudResult, setSkillsCrudResult] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const listPushJobsForUser = useQuery(
     api.example.listPushJobsForUser,
@@ -349,6 +367,99 @@ function App() {
       );
     } catch (error) {
       setPushingResult((error as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const createOrUpdateGlobalSkill = async () => {
+    setBusy("global-skill-create");
+    setSkillsCrudResult(null);
+    try {
+      const result = await globalSkillsDeploy({
+        slug: skillSlug.trim(),
+        displayName: skillDisplayName.trim(),
+        description: skillDescription.trim(),
+        version: skillVersion.trim(),
+        sourceJs: skillSourceJs,
+        entryPoint: skillEntryPoint.trim() || "default",
+        moduleFormat: skillModuleFormat,
+        releaseChannel: "stable",
+        actor: "example-admin",
+      });
+      setSelectedSkillSlug(result.slug);
+      setSkillsCrudResult(
+        `Skill deployata: ${result.slug}@${result.version} (${result.releaseChannel}) sha=${result.sha256.slice(0, 12)}...`,
+      );
+    } catch (error) {
+      setSkillsCrudResult((error as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const disableSelectedGlobalSkill = async () => {
+    if (!selectedSkillSlug) return;
+    setBusy("global-skill-disable");
+    setSkillsCrudResult(null);
+    try {
+      const result = await globalSkillsSetStatus({
+        slug: selectedSkillSlug,
+        status: "disabled",
+        actor: "example-admin",
+      });
+      setSkillsCrudResult(
+        result.updated
+          ? `Skill disabilitata: ${result.slug}`
+          : `Skill non trovata: ${result.slug}`,
+      );
+    } catch (error) {
+      setSkillsCrudResult((error as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const enableSelectedGlobalSkill = async () => {
+    if (!selectedSkillSlug) return;
+    setBusy("global-skill-enable");
+    setSkillsCrudResult(null);
+    try {
+      const result = await globalSkillsSetStatus({
+        slug: selectedSkillSlug,
+        status: "active",
+        actor: "example-admin",
+      });
+      setSkillsCrudResult(
+        result.updated
+          ? `Skill abilitata: ${result.slug}`
+          : `Skill non trovata: ${result.slug}`,
+      );
+    } catch (error) {
+      setSkillsCrudResult((error as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const deleteSelectedGlobalSkill = async () => {
+    if (!selectedSkillSlug) return;
+    setBusy("global-skill-delete");
+    setSkillsCrudResult(null);
+    try {
+      const result = await globalSkillsDelete({
+        slug: selectedSkillSlug,
+      });
+      setSkillsCrudResult(
+        result.deleted
+          ? `Skill eliminata: ${result.slug} (versions=${result.deletedVersions}, releases=${result.deletedReleases})`
+          : `Skill non trovata: ${result.slug}`,
+      );
+      if (result.deleted) {
+        setSelectedSkillSlug("");
+      }
+    } catch (error) {
+      setSkillsCrudResult((error as Error).message);
     } finally {
       setBusy(null);
     }
@@ -945,6 +1056,123 @@ function App() {
             <strong>{stats?.deadLetter ?? 0}</strong>
           </p>
           {pushingResult ? <p style={{ marginTop: "0.5rem" }}>{pushingResult}</p> : null}
+        </div>
+        <div
+          style={{
+            marginTop: "1rem",
+            padding: "1rem",
+            backgroundColor: "rgba(128, 128, 128, 0.08)",
+            borderRadius: "8px",
+          }}
+        >
+          <h3>6) Global Skills CRUD (component-level)</h3>
+          <p style={{ marginTop: 0, marginBottom: "0.75rem" }}>
+            Pannello di test CRUD per le global skills nel componente Convex.
+          </p>
+          <div style={{ marginBottom: "0.75rem" }}>
+            <input
+              value={skillSlug}
+              onChange={(event) => setSkillSlug(event.target.value)}
+              placeholder="slug"
+              style={{ marginRight: "0.5rem", padding: "0.5rem", width: "22%" }}
+            />
+            <input
+              value={skillVersion}
+              onChange={(event) => setSkillVersion(event.target.value)}
+              placeholder="version"
+              style={{ marginRight: "0.5rem", padding: "0.5rem", width: "16%" }}
+            />
+            <select
+              value={skillModuleFormat}
+              onChange={(event) => setSkillModuleFormat(event.target.value as "esm" | "cjs")}
+              style={{ marginRight: "0.5rem", padding: "0.5rem", width: "10%" }}
+            >
+              <option value="esm">esm</option>
+              <option value="cjs">cjs</option>
+            </select>
+            <input
+              value={skillEntryPoint}
+              onChange={(event) => setSkillEntryPoint(event.target.value)}
+              placeholder="entryPoint"
+              style={{ marginRight: "0.5rem", padding: "0.5rem", width: "16%" }}
+            />
+            <button
+              onClick={createOrUpdateGlobalSkill}
+              disabled={
+                busy !== null || skillSlug.trim().length === 0 || skillVersion.trim().length === 0
+              }
+            >
+              {busy === "global-skill-create" ? "Deploying..." : "Create/Update (deploy)"}
+            </button>
+          </div>
+          <div style={{ marginBottom: "0.75rem" }}>
+            <input
+              value={skillDisplayName}
+              onChange={(event) => setSkillDisplayName(event.target.value)}
+              placeholder="displayName"
+              style={{ marginRight: "0.5rem", padding: "0.5rem", width: "30%" }}
+            />
+            <input
+              value={skillDescription}
+              onChange={(event) => setSkillDescription(event.target.value)}
+              placeholder="description"
+              style={{ marginRight: "0.5rem", padding: "0.5rem", width: "60%" }}
+            />
+          </div>
+          <div style={{ marginBottom: "0.75rem" }}>
+            <textarea
+              value={skillSourceJs}
+              onChange={(event) => setSkillSourceJs(event.target.value)}
+              rows={4}
+              style={{ width: "95%", fontFamily: "monospace", padding: "0.5rem" }}
+            />
+          </div>
+          <div style={{ marginBottom: "0.75rem" }}>
+            <select
+              value={selectedSkillSlug}
+              onChange={(event) => setSelectedSkillSlug(event.target.value)}
+              style={{ marginRight: "0.5rem", padding: "0.5rem", width: "35%" }}
+            >
+              <option value="">Seleziona skill</option>
+              {(globalSkillsList ?? []).map((skill: any) => (
+                <option key={skill.skillId} value={skill.slug}>
+                  {skill.slug} [{skill.status}] {skill.activeRelease?.version ? `@${skill.activeRelease.version}` : ""}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={enableSelectedGlobalSkill}
+              disabled={busy !== null || selectedSkillSlug.length === 0}
+              style={{ marginRight: "0.5rem" }}
+            >
+              {busy === "global-skill-enable" ? "..." : "Enable"}
+            </button>
+            <button
+              onClick={disableSelectedGlobalSkill}
+              disabled={busy !== null || selectedSkillSlug.length === 0}
+              style={{ marginRight: "0.5rem" }}
+            >
+              {busy === "global-skill-disable" ? "..." : "Disable"}
+            </button>
+            <button
+              onClick={deleteSelectedGlobalSkill}
+              disabled={busy !== null || selectedSkillSlug.length === 0}
+            >
+              {busy === "global-skill-delete" ? "Deleting..." : "Delete"}
+            </button>
+          </div>
+          <p style={{ fontSize: "0.9rem", marginTop: 0, marginBottom: "0.5rem" }}>
+            Skills registrate: <strong>{globalSkillsList?.length ?? 0}</strong>
+          </p>
+          <div style={{ fontSize: "0.85rem" }}>
+            {(globalSkillsList ?? []).slice(0, 10).map((skill: any) => (
+              <div key={skill.skillId} style={{ marginBottom: "0.2rem" }}>
+                <code>{skill.slug}</code> - {skill.status} -{" "}
+                {skill.activeRelease ? `@${skill.activeRelease.version}` : "no active release"}
+              </div>
+            ))}
+          </div>
+          {skillsCrudResult ? <p style={{ marginTop: "0.5rem" }}>{skillsCrudResult}</p> : null}
         </div>
         <div
           style={{
