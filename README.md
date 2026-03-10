@@ -20,6 +20,53 @@ app.use(agentFactory);
 export default app;
 ```
 
+## Upgrade to 1.0.0
+
+Version `1.0.0` introduces a **worker lifecycle breaking change**.
+
+What changed:
+- `workers.status` is no longer binary.
+- New persisted statuses are now possible: `draining` and `stopping`.
+- The lifecycle is now `active -> draining -> stopping -> stopped`.
+- `active` now means **claimable**, not just "row exists and machine once existed".
+
+Current status values:
+- `active`: worker is healthy and can claim new jobs.
+- `draining`: worker must stop claiming and is waiting for final snapshot / shutdown progression.
+- `stopping`: final snapshot is ready or provider teardown is in progress / pending retry.
+- `stopped`: terminal state for that worker instance. Stopped workers are never reactivated.
+
+Important compatibility notes:
+- **No manual data migration is required** if your existing rows only contain `active` or `stopped`.
+- **Consumer code may require updates** if it assumes `worker.status` can only be `active` or `stopped`.
+- Any exhaustive `switch` / `if` logic, dashboards, alerts, or admin tools that parse worker status must handle `draining` and `stopping`.
+- `workerControlState` is stricter now: workers in non-claimable states, stale-heartbeat workers, and overdue workers return `shouldStop = true`.
+
+Recommended upgrade checklist:
+1. Upgrade the package to `1.0.0`.
+2. Regenerate Convex bindings in the consumer app.
+3. Update any consumer-side status handling for `workers.status`.
+4. Ensure a periodic reconcile fallback cron exists in your Convex app.
+5. Redeploy the worker runtime so it can react correctly to the stricter control-state semantics.
+
+Reference example for the recommended reconcile fallback:
+
+```ts
+import { cronJobs } from "convex/server";
+import { api } from "./_generated/api";
+
+const crons = cronJobs();
+
+crons.interval(
+  "agent-factory reconcile workers fallback",
+  { minutes: 5 },
+  api.example.startWorkers,
+  {},
+);
+
+export default crons;
+```
+
 ## Usage
 
 ### First required setup: mandatory secrets for every worker/agent
@@ -389,6 +436,10 @@ Hydration/runtime tables:
 
 ## Recent updates
 
+- `1.0.0`: worker lifecycle is now explicit and stateful with `active`, `draining`, `stopping`, `stopped`.
+- `1.0.0`: scheduler reconcile now uses provider-observed machine state and no longer treats every `active` row as reusable capacity.
+- `1.0.0`: stuck `processing` jobs are recovered more aggressively, including inconsistent rows missing valid lease metadata.
+- `1.0.0`: idle workers without `scheduledShutdownAt` are backfilled automatically during reconcile/watchdog flows.
 - `idleTimeoutMs` aligned to 5 minutes and `workers.scheduledShutdownAt` now tracks idle lifecycle from `lastClaimAt`.
 - Pre-stop drain protocol added: worker snapshots `/data` before termination and uploads archive metadata into `dataSnapshots`.
 - Restore on boot added: new workers can rehydrate from latest snapshot archive.
@@ -411,6 +462,7 @@ Hydration/runtime tables:
 - Each claimed job has a lease (`leaseId`, `leaseExpiresAt`) and heartbeat.
 - Cleanup job requeues expired `processing` jobs and unlocks conversations.
 - Retry uses exponential backoff with dead-letter fallback.
+- Reconcile now also recovers malformed `processing` rows that are missing lease metadata.
 
 ## Config-first
 
@@ -518,4 +570,4 @@ npm i
 npm run dev
 ```
 
-Upgrade note: version `0.2.14` makes `agentProfiles.providerUserId`, `agentProfiles.soulMd`, `agentProfiles.clientMd`, and `agentProfiles.skills` optional only to let you clean them safely. Before upgrading to version `0.2.15`, where those fields are expected to be removed from the schema, install `0.2.14`, run `components.agentFactory.lib.clearDeprecatedAgentProfileFields` from Convex Dashboard, and make sure a second run returns `updated = 0`. This avoids schema validation issues caused by leftover stored values during the upgrade to `0.2.15`.
+Upgrade note for older releases: version `0.2.14` makes `agentProfiles.providerUserId`, `agentProfiles.soulMd`, `agentProfiles.clientMd`, and `agentProfiles.skills` optional only to let you clean them safely. Before upgrading to version `0.2.15`, where those fields are expected to be removed from the schema, install `0.2.14`, run `components.agentFactory.lib.clearDeprecatedAgentProfileFields` from Convex Dashboard, and make sure a second run returns `updated = 0`. This avoids schema validation issues caused by leftover stored values during the upgrade to `0.2.15`.

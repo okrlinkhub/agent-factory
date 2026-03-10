@@ -931,7 +931,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             heartbeatAt: number;
             load: number;
             machineId: null | string;
-            status: "active" | "stopped";
+            status: "active" | "draining" | "stopping" | "stopped";
             workerId: string;
           }>;
         },
@@ -1525,7 +1525,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             heartbeatAt: number;
             load: number;
             machineId: null | string;
-            status: "active" | "stopped";
+            status: "active" | "draining" | "stopping" | "stopped";
             workerId: string;
           }>;
         },

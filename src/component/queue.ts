@@ -7,6 +7,13 @@ import {
   query,
 } from "./_generated/server.js";
 import { computeRetryDelayMs, DEFAULT_CONFIG, providerConfigValidator } from "./config.js";
+import {
+  canTransitionWorkerStatus,
+  isWorkerClaimable,
+  isWorkerRunning,
+  isWorkerTerminal,
+  workerStatusValidator,
+} from "./workerLifecycle.js";
 
 const queueStatusValidator = v.union(
   v.literal("queued"),
@@ -1026,7 +1033,7 @@ export const claimNextJob = mutation({
       .query("workers")
       .withIndex("by_workerId", (q) => q.eq("workerId", args.workerId))
       .unique();
-    if (worker?.status === "stopped") {
+    if (worker && !isWorkerClaimable(worker.status)) {
       return null;
     }
     const candidates = await ctx.db
@@ -1093,8 +1100,11 @@ export const claimNextJob = mutation({
           heartbeatAt: nowMs,
           lastClaimAt: nowMs,
           scheduledShutdownAt: undefined,
+          stoppedAt: undefined,
         });
       }
+
+      await scheduleLeaseRecoveryWatchdog(ctx, nowMs);
 
       return {
         messageId: candidate._id,
@@ -1157,7 +1167,7 @@ export const heartbeatJob = mutation({
       .query("workers")
       .withIndex("by_workerId", (q) => q.eq("workerId", args.workerId))
       .unique();
-    if (worker?.status === "active") {
+    if (worker && isWorkerRunning(worker.status)) {
       await ctx.db.patch(worker._id, { heartbeatAt: nowMs });
     }
 
@@ -1214,11 +1224,7 @@ export const completeJob = mutation({
       .unique();
     if (worker) {
       const nextLoad = Math.max(0, worker.load - 1);
-      const shutdownBaseMs = worker.lastClaimAt ?? nowMs;
-      const nextScheduledShutdownAt =
-        nextLoad === 0
-          ? shutdownBaseMs + DEFAULT_CONFIG.scaling.idleTimeoutMs
-          : undefined;
+      const nextScheduledShutdownAt = computeNextScheduledShutdownAt(worker, nextLoad, nowMs);
       await ctx.db.patch(worker._id, {
         load: nextLoad,
         heartbeatAt: nowMs,
@@ -1306,11 +1312,7 @@ export const failJob = mutation({
       .unique();
     if (worker) {
       const nextLoad = Math.max(0, worker.load - 1);
-      const shutdownBaseMs = worker.lastClaimAt ?? nowMs;
-      const nextScheduledShutdownAt =
-        nextLoad === 0
-          ? shutdownBaseMs + DEFAULT_CONFIG.scaling.idleTimeoutMs
-          : undefined;
+      const nextScheduledShutdownAt = computeNextScheduledShutdownAt(worker, nextLoad, nowMs);
       await ctx.db.patch(worker._id, {
         load: nextLoad,
         heartbeatAt: nowMs,
@@ -1348,10 +1350,21 @@ export const releaseExpiredLeases = internalMutation({
         q.eq("status", "processing").lte("leaseExpiresAt", nowMs),
       )
       .take(limit);
+    const invalidProcessing = (await ctx.db
+      .query("messageQueue")
+      .withIndex("by_status_and_scheduledFor", (q) => q.eq("status", "processing"))
+      .take(limit)
+    ).filter(
+      (message) =>
+        message.leaseExpiresAt === undefined ||
+        message.leaseId === undefined ||
+        message.claimedBy === undefined,
+    );
+    const processingRows = dedupeMessagesById([...stuck, ...invalidProcessing]);
 
     let requeued = 0;
     let unlocked = 0;
-    for (const message of stuck) {
+    for (const message of processingRows) {
       const claimedWorkerId = message.claimedBy;
       await ctx.db.patch(message._id, {
         status: "queued",
@@ -1382,10 +1395,9 @@ export const releaseExpiredLeases = internalMutation({
           .query("workers")
           .withIndex("by_workerId", (q) => q.eq("workerId", claimedWorkerId))
           .unique();
-        if (worker && worker.status === "active") {
+        if (worker && !isWorkerTerminal(worker.status)) {
           const nextLoad = Math.max(0, worker.load - 1);
-          const nextScheduledShutdownAt =
-            nextLoad === 0 ? nowMs + DEFAULT_CONFIG.scaling.idleTimeoutMs : undefined;
+          const nextScheduledShutdownAt = computeNextScheduledShutdownAt(worker, nextLoad, nowMs);
           await ctx.db.patch(worker._id, {
             load: nextLoad,
             heartbeatAt: nowMs,
@@ -1421,10 +1433,21 @@ export const releaseStuckJobs = mutation({
         q.eq("status", "processing").lte("leaseExpiresAt", nowMs),
       )
       .take(limit);
+    const invalidProcessing = (await ctx.db
+      .query("messageQueue")
+      .withIndex("by_status_and_scheduledFor", (q) => q.eq("status", "processing"))
+      .take(limit)
+    ).filter(
+      (message) =>
+        message.leaseExpiresAt === undefined ||
+        message.leaseId === undefined ||
+        message.claimedBy === undefined,
+    );
+    const processingRows = dedupeMessagesById([...stuck, ...invalidProcessing]);
 
     let requeued = 0;
     let unlocked = 0;
-    for (const message of stuck) {
+    for (const message of processingRows) {
       const claimedWorkerId = message.claimedBy;
       await ctx.db.patch(message._id, {
         status: "queued",
@@ -1455,10 +1478,9 @@ export const releaseStuckJobs = mutation({
           .query("workers")
           .withIndex("by_workerId", (q) => q.eq("workerId", claimedWorkerId))
           .unique();
-        if (worker && worker.status === "active") {
+        if (worker && !isWorkerTerminal(worker.status)) {
           const nextLoad = Math.max(0, worker.load - 1);
-          const nextScheduledShutdownAt =
-            nextLoad === 0 ? nowMs + DEFAULT_CONFIG.scaling.idleTimeoutMs : undefined;
+          const nextScheduledShutdownAt = computeNextScheduledShutdownAt(worker, nextLoad, nowMs);
           await ctx.db.patch(worker._id, {
             load: nextLoad,
             heartbeatAt: nowMs,
@@ -1736,10 +1758,7 @@ export const upsertWorkerState = internalMutation({
   args: {
     workerId: v.string(),
     provider: v.string(),
-    status: v.union(
-      v.literal("active"),
-      v.literal("stopped"),
-    ),
+    status: workerStatusValidator,
     load: v.number(),
     nowMs: v.optional(v.number()),
     scheduledShutdownAt: v.optional(v.number()),
@@ -1748,6 +1767,7 @@ export const upsertWorkerState = internalMutation({
     appName: v.optional(v.string()),
     region: v.optional(v.string()),
     clearLastSnapshotId: v.optional(v.boolean()),
+    clearMachineRef: v.optional(v.boolean()),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -1764,7 +1784,10 @@ export const upsertWorkerState = internalMutation({
         load: args.load,
         heartbeatAt: nowMs,
         scheduledShutdownAt: args.scheduledShutdownAt,
-        stoppedAt: args.status === "stopped" ? (args.stoppedAt ?? nowMs) : undefined,
+        stoppedAt:
+          args.status === "stopped" || args.status === "stopping"
+            ? (args.stoppedAt ?? nowMs)
+            : undefined,
         machineRef:
           args.machineId && args.appName
             ? {
@@ -1778,22 +1801,26 @@ export const upsertWorkerState = internalMutation({
       return null;
     }
 
-    if (worker.status === "stopped" && args.status === "active") {
-      throw new Error(`Worker '${args.workerId}' is stopped and cannot be reactivated.`);
+    if (!canTransitionWorkerStatus(worker.status, args.status)) {
+      throw new Error(
+        `Worker '${args.workerId}' cannot transition from '${worker.status}' to '${args.status}'.`,
+      );
     }
 
     await ctx.db.patch(worker._id, {
       status: args.status,
       load: args.load,
-      heartbeatAt: args.status === "active" ? nowMs : worker.heartbeatAt,
+      heartbeatAt: isWorkerRunning(args.status) ? nowMs : worker.heartbeatAt,
       scheduledShutdownAt: args.scheduledShutdownAt ?? worker.scheduledShutdownAt,
       stoppedAt:
-        args.status === "active"
-          ? undefined
-          : (args.stoppedAt ?? worker.stoppedAt ?? nowMs),
+        args.status === "stopped" || args.status === "stopping"
+          ? (args.stoppedAt ?? worker.stoppedAt ?? nowMs)
+          : undefined,
       lastSnapshotId: args.clearLastSnapshotId ? undefined : worker.lastSnapshotId,
       machineRef:
-        args.machineId && args.appName
+        args.clearMachineRef
+          ? undefined
+          : args.machineId && args.appName
           ? {
               appName: args.appName,
               machineId: args.machineId,
@@ -1818,10 +1845,12 @@ export const getWorkerControlState = query({
       .withIndex("by_workerId", (q) => q.eq("workerId", args.workerId))
       .unique();
     const nowMs = Date.now();
+    const staleHeartbeatCutoff = nowMs - DEFAULT_CONFIG.lease.staleAfterMs;
     return {
       shouldStop:
         !worker ||
-        worker.status === "stopped" ||
+        !isWorkerClaimable(worker.status) ||
+        worker.heartbeatAt <= staleHeartbeatCutoff ||
         (worker.scheduledShutdownAt !== undefined && worker.scheduledShutdownAt <= nowMs),
     };
   },
@@ -1888,6 +1917,9 @@ export const finalizeDataSnapshotUpload = mutation({
     if (worker) {
       await ctx.db.patch(worker._id, {
         lastSnapshotId: snapshot._id,
+        status: worker.status === "draining" ? "stopping" : worker.status,
+        stoppedAt:
+          worker.status === "draining" ? (worker.stoppedAt ?? nowMs) : worker.stoppedAt,
       });
     }
     return true;
@@ -1969,10 +2001,7 @@ export const listWorkersForScheduler = internalQuery({
   returns: v.array(
     v.object({
       workerId: v.string(),
-      status: v.union(
-        v.literal("active"),
-        v.literal("stopped"),
-      ),
+      status: workerStatusValidator,
       load: v.number(),
       heartbeatAt: v.number(),
       lastClaimAt: v.union(v.null(), v.number()),
@@ -2032,10 +2061,7 @@ export const getWorkerStats = query({
     workers: v.array(
       v.object({
         workerId: v.string(),
-        status: v.union(
-          v.literal("active"),
-          v.literal("stopped"),
-        ),
+        status: workerStatusValidator,
         load: v.number(),
         heartbeatAt: v.number(),
         machineId: v.union(v.null(), v.string()),
@@ -2164,6 +2190,49 @@ async function scheduleIdleShutdownWatchdog(
       }`,
     );
   }
+}
+
+async function scheduleLeaseRecoveryWatchdog(ctx: any, nowMs: number) {
+  const delayMs = DEFAULT_CONFIG.lease.leaseMs + 1_000;
+  try {
+    await ctx.scheduler.runAfter(delayMs, (internal.scheduler as any).reconcileWorkerPoolInternal, {
+      workspaceId: "default",
+    });
+  } catch (error) {
+    console.warn(
+      `[queue] failed to schedule lease-recovery watchdog: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+}
+
+function computeNextScheduledShutdownAt(
+  worker: {
+    lastClaimAt?: number;
+    scheduledShutdownAt?: number;
+  },
+  nextLoad: number,
+  nowMs: number,
+): number | undefined {
+  if (nextLoad > 0) {
+    return undefined;
+  }
+  const shutdownBaseMs = worker.lastClaimAt ?? nowMs;
+  return worker.scheduledShutdownAt ?? shutdownBaseMs + DEFAULT_CONFIG.scaling.idleTimeoutMs;
+}
+
+function dedupeMessagesById<T extends { _id: string }>(messages: Array<T>): Array<T> {
+  const seen = new Set<string>();
+  const deduped: Array<T> = [];
+  for (const message of messages) {
+    if (seen.has(message._id)) {
+      continue;
+    }
+    seen.add(message._id);
+    deduped.push(message);
+  }
+  return deduped;
 }
 
 function normalizeMessageRuntimeConfig(

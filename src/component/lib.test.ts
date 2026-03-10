@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api.js";
 import { initConvexTest } from "./setup.test.js";
+import { canTransitionWorkerStatus } from "./workerLifecycle.js";
 
 const TEST_PROVIDER_CONFIG = {
   kind: "fly" as const,
@@ -57,6 +58,14 @@ describe("component lib", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  test("worker status transitions should enforce draining before stopping", () => {
+    expect(canTransitionWorkerStatus("active", "active")).toBe(true);
+    expect(canTransitionWorkerStatus("active", "draining")).toBe(true);
+    expect(canTransitionWorkerStatus("active", "stopping")).toBe(false);
+    expect(canTransitionWorkerStatus("active", "stopped")).toBe(false);
+    expect(canTransitionWorkerStatus("draining", "stopped")).toBe(false);
   });
   test("enqueue and claim should respect queue flow", async () => {
     const t = initConvexTest();
@@ -309,7 +318,7 @@ describe("component lib", () => {
     expect(worker?.scheduledShutdownAt).toBe(now + 300_000);
   });
 
-  test("idle shutdown should force worker to stopped and prevent reactivation", async () => {
+  test("idle shutdown should move worker to draining and prevent reactivation", async () => {
     const t = initConvexTest();
     const claimTime = Date.UTC(2026, 0, 1, 12, 0, 0);
     vi.stubGlobal(
@@ -366,8 +375,9 @@ describe("component lib", () => {
 
     const workers = await t.query((internal.queue as any).listWorkersForScheduler, {});
     const worker = workers.find((row: { workerId: string }) => row.workerId === "worker-stop-force-1");
-    expect(worker?.status).toBe("stopped");
-    expect(worker?.stoppedAt).toBe(dueTime);
+    expect(worker?.status).toBe("draining");
+    expect(worker?.scheduledShutdownAt).toBe(claimTime + 300_000);
+    expect(worker?.stoppedAt).toBeNull();
 
     const control = await t.query(api.queue.getWorkerControlState as any, {
       workerId: "worker-stop-force-1",
@@ -584,6 +594,12 @@ describe("component lib", () => {
     expect(firstPass.stopped).toBe(1);
     expect(firstPass.pending).toBe(1);
 
+    const workersAfterFirstPass = await t.query((internal.queue as any).listWorkersForScheduler, {});
+    const workerAfterFirstPass = workersAfterFirstPass.find(
+      (row: { workerId: string }) => row.workerId === workerId,
+    );
+    expect(workerAfterFirstPass?.status).toBe("draining");
+
     const prematureDeleteCalls = fetchMock.mock.calls.filter((call) =>
       String(call[0]).includes(`/volumes/${volumeId}`),
     );
@@ -616,6 +632,12 @@ describe("component lib", () => {
       providerConfig: TEST_PROVIDER_CONFIG,
     });
     expect(secondPass.pending).toBe(0);
+
+    const workersAfterSecondPass = await t.query((internal.queue as any).listWorkersForScheduler, {});
+    const workerAfterSecondPass = workersAfterSecondPass.find(
+      (row: { workerId: string }) => row.workerId === workerId,
+    );
+    expect(workerAfterSecondPass?.status).toBe("stopped");
 
     const deleteMachineCalls = fetchMock.mock.calls.filter(
       (call) =>
@@ -688,6 +710,10 @@ describe("component lib", () => {
         ((call[1] as RequestInit | undefined)?.method ?? "GET") === "DELETE",
     );
     expect(deleteVolumeCalls).toHaveLength(1);
+
+    const workers = await t.query((internal.queue as any).listWorkersForScheduler, {});
+    const worker = workers.find((row: { workerId: string }) => row.workerId === workerId);
+    expect(worker?.status).toBe("stopped");
   });
 
   test("scheduler count includes queued and in-progress conversations", async () => {
@@ -737,7 +763,9 @@ describe("component lib", () => {
   test("upsertWorkerState should preserve heartbeat for stopped workers", async () => {
     const t = initConvexTest();
     const firstHeartbeat = 1_700_000_000_000;
-    const stoppedAt = firstHeartbeat + 120_000;
+    const drainingAt = firstHeartbeat + 60_000;
+    const stoppingAt = firstHeartbeat + 120_000;
+    const stoppedAt = firstHeartbeat + 180_000;
 
     await t.mutation(internal.queue.upsertWorkerState, {
       workerId: "worker-heartbeat-1",
@@ -750,10 +778,30 @@ describe("component lib", () => {
     await t.mutation(internal.queue.upsertWorkerState, {
       workerId: "worker-heartbeat-1",
       provider: "fly",
+      status: "draining",
+      load: 0,
+      nowMs: drainingAt,
+      scheduledShutdownAt: stoppingAt,
+    });
+
+    await t.mutation(internal.queue.upsertWorkerState, {
+      workerId: "worker-heartbeat-1",
+      provider: "fly",
+      status: "stopping",
+      load: 0,
+      nowMs: stoppingAt,
+      scheduledShutdownAt: stoppingAt,
+      stoppedAt: stoppingAt,
+    });
+
+    await t.mutation(internal.queue.upsertWorkerState, {
+      workerId: "worker-heartbeat-1",
+      provider: "fly",
       status: "stopped",
       load: 0,
       nowMs: stoppedAt,
-      scheduledShutdownAt: stoppedAt,
+      scheduledShutdownAt: stoppingAt,
+      stoppedAt,
     });
 
     const workers = await t.query((internal.queue as any).listWorkersForScheduler, {});
@@ -762,13 +810,27 @@ describe("component lib", () => {
     );
 
     expect(worker?.status).toBe("stopped");
-    expect(worker?.heartbeatAt).toBe(firstHeartbeat);
-    expect(worker?.scheduledShutdownAt).toBe(stoppedAt);
+    expect(worker?.heartbeatAt).toBe(stoppingAt);
+    expect(worker?.scheduledShutdownAt).toBe(stoppingAt);
     expect(worker?.stoppedAt).toBe(stoppedAt);
   });
 
   test("scheduler caps desired workers by distinct ready conversations", async () => {
     const t = initConvexTest();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/machines`) && method === "GET") {
+          return jsonResponse([]);
+        }
+        if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/volumes`) && method === "GET") {
+          return jsonResponse([]);
+        }
+        throw new Error(`Unexpected fetch ${method} ${url}`);
+      }),
+    );
     await t.mutation(api.queue.upsertAgentProfile, {
       agentKey: "support-agent",
       version: "1.0.0",
@@ -839,6 +901,20 @@ describe("component lib", () => {
 
   test("scheduler desired workers increases with distinct ready conversations", async () => {
     const t = initConvexTest();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/machines`) && method === "GET") {
+          return jsonResponse([]);
+        }
+        if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/volumes`) && method === "GET") {
+          return jsonResponse([]);
+        }
+        throw new Error(`Unexpected fetch ${method} ${url}`);
+      }),
+    );
     await t.mutation(api.queue.upsertAgentProfile, {
       agentKey: "support-agent",
       version: "1.0.0",
@@ -905,6 +981,318 @@ describe("component lib", () => {
     expect(reconcile.activeWorkers).toBe(3);
     expect(reconcile.spawned).toBe(0);
     expect(reconcile.terminated).toBe(0);
+  });
+
+  test("scheduler should spawn a new worker when another conversation is already processing", async () => {
+    const t = initConvexTest();
+    const nowMs = Date.UTC(2026, 0, 1, 17, 0, 0);
+    vi.setSystemTime(nowMs);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/machines`) && method === "GET") {
+        return jsonResponse([
+          {
+            id: "machine-busy-1",
+            name: "worker-busy-1",
+            region: TEST_PROVIDER_CONFIG.region,
+            state: "started",
+            config: { image: TEST_PROVIDER_CONFIG.image },
+          },
+        ]);
+      }
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/volumes`) && method === "GET") {
+        return jsonResponse([]);
+      }
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/volumes`) && method === "POST") {
+        return jsonResponse({
+          id: "vol-new-worker",
+          name: buildDedicatedVolumeName(TEST_PROVIDER_CONFIG.volumeName, "afw-176"),
+          region: TEST_PROVIDER_CONFIG.region,
+        });
+      }
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/machines`) && method === "POST") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { name?: string };
+        return jsonResponse({
+          id: "machine-new-worker",
+          name: body.name,
+          region: TEST_PROVIDER_CONFIG.region,
+          state: "started",
+          config: { image: TEST_PROVIDER_CONFIG.image },
+        });
+      }
+      throw new Error(`Unexpected fetch ${method} ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await t.mutation(api.queue.upsertAgentProfile, {
+      agentKey: "support-agent",
+      version: "1.0.0",
+      secretsRef: [],
+      enabled: true,
+    });
+    await t.mutation(api.queue.importPlaintextSecret, {
+      secretRef: "fly.apiToken",
+      plaintextValue: "fly-token",
+    });
+    await t.mutation(api.queue.importPlaintextSecret, {
+      secretRef: "convex.url",
+      plaintextValue: "https://example.convex.cloud",
+    });
+    await t.mutation(api.queue.enqueueMessage, {
+      conversationId: "telegram:chat:spawn-a",
+      agentKey: "support-agent",
+      payload: {
+        provider: "telegram",
+        providerUserId: "u-spawn-a",
+        messageText: "first",
+      },
+    });
+    await t.mutation(api.queue.enqueueMessage, {
+      conversationId: "telegram:chat:spawn-b",
+      agentKey: "support-agent",
+      payload: {
+        provider: "telegram",
+        providerUserId: "u-spawn-b",
+        messageText: "second",
+      },
+    });
+
+    const claim = await t.mutation(api.lib.claim, { workerId: "worker-busy-1", nowMs });
+    expect(claim?.conversationId).toBe("telegram:chat:spawn-a");
+
+    await t.mutation(internal.queue.upsertWorkerState, {
+      workerId: "worker-busy-1",
+      provider: "fly",
+      status: "active",
+      load: 1,
+      nowMs,
+      machineId: "machine-busy-1",
+      appName: TEST_PROVIDER_CONFIG.appName,
+      region: TEST_PROVIDER_CONFIG.region,
+    });
+
+    const reconcile = await t.action(api.scheduler.reconcileWorkerPool, {
+      nowMs,
+      flyApiToken: "fly-token",
+      convexUrl: "https://example.convex.cloud",
+      scalingPolicy: {
+        maxWorkers: 5,
+        queuePerWorkerTarget: 1,
+        spawnStep: 2,
+        idleTimeoutMs: 300_000,
+        reconcileIntervalMs: 15_000,
+      },
+      providerConfig: TEST_PROVIDER_CONFIG,
+    });
+
+    expect(reconcile.spawned).toBe(1);
+    expect(reconcile.activeWorkers).toBe(2);
+  });
+
+  test("checkIdleShutdowns should backfill missing scheduledShutdownAt for idle active workers", async () => {
+    const t = initConvexTest();
+    const nowMs = Date.UTC(2026, 0, 1, 18, 0, 0);
+    vi.setSystemTime(nowMs);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/machines`) && method === "GET") {
+        return jsonResponse([]);
+      }
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/volumes`) && method === "GET") {
+        return jsonResponse([]);
+      }
+      throw new Error(`Unexpected fetch ${method} ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await t.mutation(internal.queue.upsertWorkerState, {
+      workerId: "worker-missing-shutdown-1",
+      provider: "fly",
+      status: "active",
+      load: 0,
+      nowMs: nowMs - 600_000,
+    });
+    await t.run(async (ctx) => {
+      const worker = await ctx.db
+        .query("workers")
+        .withIndex("by_workerId", (q) => q.eq("workerId", "worker-missing-shutdown-1"))
+        .unique();
+      if (!worker) {
+        throw new Error("Worker not found");
+      }
+      await ctx.db.patch(worker._id, {
+        lastClaimAt: nowMs - 600_000,
+        heartbeatAt: nowMs,
+        scheduledShutdownAt: undefined,
+      });
+    });
+
+    const result = await t.action(api.scheduler.checkIdleShutdowns, {
+      nowMs,
+      flyApiToken: "fly-token",
+      providerConfig: TEST_PROVIDER_CONFIG,
+    });
+    expect(result.stopped).toBe(1);
+    expect(result.pending).toBe(1);
+
+    const workers = await t.query((internal.queue as any).listWorkersForScheduler, {});
+    const worker = workers.find(
+      (row: { workerId: string }) => row.workerId === "worker-missing-shutdown-1",
+    );
+    expect(worker?.status).toBe("draining");
+    expect(worker?.scheduledShutdownAt).toBe(nowMs - 300_000);
+  });
+
+  test("provider-stopped machines should not remain active in the worker table", async () => {
+    const t = initConvexTest();
+    const nowMs = Date.UTC(2026, 0, 1, 19, 0, 0);
+    vi.setSystemTime(nowMs);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/machines`) && method === "GET") {
+        return jsonResponse([
+          {
+            id: "machine-provider-stopped-1",
+            name: "worker-provider-stopped-1",
+            region: TEST_PROVIDER_CONFIG.region,
+            state: "stopped",
+            config: { image: TEST_PROVIDER_CONFIG.image },
+          },
+        ]);
+      }
+      if (url.endsWith(`/machines/machine-provider-stopped-1`) && method === "GET") {
+        return jsonResponse({
+          id: "machine-provider-stopped-1",
+          config: { mounts: [] },
+        });
+      }
+      if (url.endsWith(`/machines/machine-provider-stopped-1/cordon`) && method === "POST") {
+        return emptyResponse();
+      }
+      if (url.endsWith(`/machines/machine-provider-stopped-1/stop`) && method === "POST") {
+        return emptyResponse();
+      }
+      if (url.endsWith(`/machines/machine-provider-stopped-1`) && method === "DELETE") {
+        return emptyResponse();
+      }
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/volumes`) && method === "GET") {
+        return jsonResponse([]);
+      }
+      throw new Error(`Unexpected fetch ${method} ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await t.mutation(internal.queue.upsertWorkerState, {
+      workerId: "worker-provider-stopped-1",
+      provider: "fly",
+      status: "active",
+      load: 1,
+      nowMs: nowMs - 60_000,
+      machineId: "machine-provider-stopped-1",
+      appName: TEST_PROVIDER_CONFIG.appName,
+      region: TEST_PROVIDER_CONFIG.region,
+    });
+
+    const reconcile = await t.action(api.scheduler.checkIdleShutdowns, {
+      nowMs,
+      flyApiToken: "fly-token",
+      providerConfig: TEST_PROVIDER_CONFIG,
+    });
+    expect(reconcile.stopped).toBe(1);
+    expect(reconcile.pending).toBe(0);
+
+    const workers = await t.query((internal.queue as any).listWorkersForScheduler, {});
+    const worker = workers.find(
+      (row: { workerId: string }) => row.workerId === "worker-provider-stopped-1",
+    );
+    expect(worker?.status).toBe("stopped");
+  });
+
+  test("provider-unavailable active workers should enter draining before teardown", async () => {
+    const t = initConvexTest();
+    const nowMs = Date.UTC(2026, 0, 1, 19, 30, 0);
+    vi.setSystemTime(nowMs);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/machines`) && method === "GET") {
+        return jsonResponse([
+          {
+            id: "machine-provider-draining-1",
+            name: "worker-provider-draining-1",
+            region: TEST_PROVIDER_CONFIG.region,
+            state: "stopped",
+            config: { image: TEST_PROVIDER_CONFIG.image },
+          },
+        ]);
+      }
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/volumes`) && method === "GET") {
+        return jsonResponse([]);
+      }
+      throw new Error(`Unexpected fetch ${method} ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await t.mutation(api.queue.upsertAgentProfile, {
+      agentKey: "support-agent",
+      version: "1.0.0",
+      secretsRef: [],
+      enabled: true,
+    });
+    const messageId = await t.mutation(api.lib.enqueue, {
+      conversationId: "telegram:chat:provider-draining",
+      agentKey: "support-agent",
+      payload: {
+        provider: "telegram",
+        providerUserId: "u-provider-draining",
+        messageText: "snapshot me",
+      },
+    });
+    const claim = await t.mutation(api.lib.claim, {
+      workerId: "worker-provider-draining-1",
+      nowMs,
+    });
+    expect(claim?.messageId).toBe(messageId);
+
+    await t.mutation(internal.queue.upsertWorkerState, {
+      workerId: "worker-provider-draining-1",
+      provider: "fly",
+      status: "active",
+      load: 1,
+      nowMs,
+      machineId: "machine-provider-draining-1",
+      appName: TEST_PROVIDER_CONFIG.appName,
+      region: TEST_PROVIDER_CONFIG.region,
+    });
+
+    const reconcile = await t.action(api.scheduler.checkIdleShutdowns, {
+      nowMs,
+      flyApiToken: "fly-token",
+      providerConfig: TEST_PROVIDER_CONFIG,
+    });
+    expect(reconcile.stopped).toBe(1);
+    expect(reconcile.pending).toBe(1);
+
+    const workers = await t.query((internal.queue as any).listWorkersForScheduler, {});
+    const worker = workers.find(
+      (row: { workerId: string }) => row.workerId === "worker-provider-draining-1",
+    );
+    expect(worker?.status).toBe("draining");
+    expect(worker?.stoppedAt).toBeNull();
+
+    const teardownCalls = fetchMock.mock.calls.filter((call) => {
+      const url = String(call[0]);
+      const method = ((call[1] as RequestInit | undefined)?.method ?? "GET").toUpperCase();
+      return (
+        url.includes("/machines/machine-provider-draining-1/cordon") ||
+        url.includes("/machines/machine-provider-draining-1/stop") ||
+        (url.endsWith("/machines/machine-provider-draining-1") && method === "DELETE")
+      );
+    });
+    expect(teardownCalls).toHaveLength(0);
   });
 
   test("push jobs should dispatch scheduled messages with fallback user conversation id", async () => {

@@ -10,4 +10,11 @@ crons.cron(
   {},
 );
 
+crons.interval(
+  "agent-factory reconcile workers fallback",
+  { minutes: 5 },
+  api.example.startWorkers,
+  {},
+);
+
 export default crons;

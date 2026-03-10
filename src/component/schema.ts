@@ -1,5 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import { workerStatusValidator } from "./workerLifecycle.js";
 
 export default defineSchema({
   agentProfiles: defineTable({
@@ -111,10 +112,7 @@ export default defineSchema({
         region: v.optional(v.string()),
       }),
     ),
-    status: v.union(
-      v.literal("active"),
-      v.literal("stopped"),
-    ),
+    status: workerStatusValidator,
     load: v.number(),
     heartbeatAt: v.number(),
     lastClaimAt: v.optional(v.number()),

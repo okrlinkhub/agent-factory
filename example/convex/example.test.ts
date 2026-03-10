@@ -9,6 +9,8 @@ describe("example", () => {
 
   afterEach(async () => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   test("queueStats", async () => {
@@ -22,6 +24,26 @@ describe("example", () => {
 
   test("seed, secrets e reconcile workers", async () => {
     const t = initConvexTest();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url.endsWith("/apps/agent-factory-workers-example/machines") && method === "GET") {
+          return new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        if (url.endsWith("/apps/agent-factory-workers-example/volumes") && method === "GET") {
+          return new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        throw new Error(`Unexpected fetch ${method} ${url}`);
+      }),
+    );
 
     const profileId = await t.mutation(api.example.seedDefaultAgent, {});
     expect(profileId).toBeDefined();

@@ -15,6 +15,7 @@ import type * as providers_fly from "../providers/fly.js";
 import type * as pushing from "../pushing.js";
 import type * as queue from "../queue.js";
 import type * as scheduler from "../scheduler.js";
+import type * as workerLifecycle from "../workerLifecycle.js";
 
 import type {
   ApiFromModules,
@@ -31,6 +32,7 @@ const fullApi: ApiFromModules<{
   pushing: typeof pushing;
   queue: typeof queue;
   scheduler: typeof scheduler;
+  workerLifecycle: typeof workerLifecycle;
 }> = anyApi as any;
 
 /**
