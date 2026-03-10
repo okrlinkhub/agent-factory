@@ -260,6 +260,23 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         },
         Name
       >;
+      clearDeprecatedAgentProfileFields: FunctionReference<
+        "mutation",
+        "internal",
+        { dryRun?: boolean },
+        {
+          clearedClientMd: number;
+          clearedProviderUserId: number;
+          clearedSkills: number;
+          clearedSoulMd: number;
+          dryRun: boolean;
+          scanned: number;
+          unchanged: number;
+          updated: number;
+          updatedAgentKeys: Array<string>;
+        },
+        Name
+      >;
       complete: FunctionReference<
         "mutation",
         "internal",
@@ -299,8 +316,8 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           enabled: boolean;
           providerUserId?: string;
           secretsRef: Array<string>;
-          skills: Array<string>;
-          soulMd: string;
+          skills?: Array<string>;
+          soulMd?: string;
           version: string;
         },
         string,
@@ -704,6 +721,13 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         }>,
         Name
       >;
+      messageRuntimeConfig: FunctionReference<
+        "query",
+        "internal",
+        {},
+        null | { systemPrompt?: string },
+        Name
+      >;
       providerRuntimeConfig: FunctionReference<
         "query",
         "internal",
@@ -821,6 +845,13 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           failed: number;
           totalTargets: number;
         },
+        Name
+      >;
+      setMessageRuntimeConfig: FunctionReference<
+        "mutation",
+        "internal",
+        { messageConfig: { systemPrompt?: string }; nowMs?: number },
+        null,
         Name
       >;
       setProviderRuntimeConfig: FunctionReference<
@@ -1242,6 +1273,23 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         },
         Name
       >;
+      clearDeprecatedAgentProfileFields: FunctionReference<
+        "mutation",
+        "internal",
+        { dryRun?: boolean },
+        {
+          clearedClientMd: number;
+          clearedProviderUserId: number;
+          clearedSkills: number;
+          clearedSoulMd: number;
+          dryRun: boolean;
+          scanned: number;
+          unchanged: number;
+          updated: number;
+          updatedAgentKeys: Array<string>;
+        },
+        Name
+      >;
       completeJob: FunctionReference<
         "mutation",
         "internal",
@@ -1600,6 +1648,13 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         }>,
         Name
       >;
+      messageRuntimeConfig: FunctionReference<
+        "query",
+        "internal",
+        {},
+        null | { systemPrompt?: string },
+        Name
+      >;
       prepareDataSnapshotUpload: FunctionReference<
         "mutation",
         "internal",
@@ -1649,6 +1704,13 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         { slug: string; status: "active" | "disabled"; updated: boolean },
         Name
       >;
+      setMessageRuntimeConfig: FunctionReference<
+        "mutation",
+        "internal",
+        { messageConfig: { systemPrompt?: string }; nowMs?: number },
+        null,
+        Name
+      >;
       setProviderRuntimeConfig: FunctionReference<
         "mutation",
         "internal",
@@ -1685,8 +1747,8 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           enabled: boolean;
           providerUserId?: string;
           secretsRef: Array<string>;
-          skills: Array<string>;
-          soulMd: string;
+          skills?: Array<string>;
+          soulMd?: string;
           version: string;
         },
         string,

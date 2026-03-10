@@ -603,7 +603,8 @@ function App() {
         >
           <h3>1) Seed Agent</h3>
           <p style={{ marginTop: 0, marginBottom: "0.75rem" }}>
-            Crea/aggiorna il profilo `default` usando la logica del componente.
+            Crea/aggiorna il profilo `default` minimale senza valorizzare i campi deprecated del
+            profilo agente.
           </p>
           <button onClick={seedAgent} disabled={busy !== null}>
             {busy === "seed" ? "Seeding..." : "Seed default agent"}

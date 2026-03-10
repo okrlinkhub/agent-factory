@@ -65,6 +65,10 @@ const bridgeRuntimeConfigValidator = v.object({
   serviceKeySecretRef: v.union(v.null(), v.string()),
 });
 
+const messageRuntimeConfigValidator = v.object({
+  systemPrompt: v.optional(v.string()),
+});
+
 const globalSkillStatusValidator = v.union(v.literal("active"), v.literal("disabled"));
 const globalSkillReleaseChannelValidator = v.union(v.literal("stable"), v.literal("canary"));
 const globalSkillModuleFormatValidator = v.union(v.literal("esm"), v.literal("cjs"));
@@ -86,6 +90,11 @@ const BRIDGE_SECRET_REFS = {
   appKey: "agent-bridge.appKey",
 } as const;
 
+const RUNTIME_CONFIG_KEYS = {
+  provider: "provider",
+  message: "message",
+} as const;
+
 export const enqueueMessage = mutation({
   args: {
     conversationId: v.string(),
@@ -100,6 +109,10 @@ export const enqueueMessage = mutation({
   returns: v.id("messageQueue"),
   handler: async (ctx, args) => {
     const nowMs = args.nowMs ?? Date.now();
+    const messageRuntimeConfigRow = await ctx.db
+      .query("runtimeConfig")
+      .withIndex("by_key", (q) => q.eq("key", RUNTIME_CONFIG_KEYS.message))
+      .unique();
     const profile = await ctx.db
       .query("agentProfiles")
       .withIndex("by_agentKey", (q) => q.eq("agentKey", args.agentKey))
@@ -126,6 +139,10 @@ export const enqueueMessage = mutation({
 
     const payload = {
       ...args.payload,
+      messageText: appendSystemPromptToMessage(
+        args.payload.messageText,
+        messageRuntimeConfigRow?.messageConfig?.systemPrompt,
+      ),
       providerUserId: providerUserIdStr,
       metadata: {
         ...(args.payload.metadata ?? {}),
@@ -252,9 +269,9 @@ export const upsertAgentProfile = mutation({
     agentKey: v.string(),
     providerUserId: v.optional(v.string()),
     version: v.string(),
-    soulMd: v.string(),
+    soulMd: v.optional(v.string()),
     clientMd: v.optional(v.string()),
-    skills: v.array(v.string()),
+    skills: v.optional(v.array(v.string())),
     secretsRef: v.array(v.string()),
     bridgeConfig: v.optional(bridgeProfileConfigValidator),
     enabled: v.boolean(),
@@ -275,6 +292,85 @@ export const upsertAgentProfile = mutation({
     }
     await ctx.db.patch(existing._id, { ...args, secretsRef });
     return existing._id;
+  },
+});
+
+export const clearDeprecatedAgentProfileFields = mutation({
+  args: {
+    dryRun: v.optional(v.boolean()),
+  },
+  returns: v.object({
+    dryRun: v.boolean(),
+    scanned: v.number(),
+    updated: v.number(),
+    unchanged: v.number(),
+    clearedProviderUserId: v.number(),
+    clearedSoulMd: v.number(),
+    clearedClientMd: v.number(),
+    clearedSkills: v.number(),
+    updatedAgentKeys: v.array(v.string()),
+  }),
+  handler: async (ctx, args) => {
+    const profiles = await ctx.db.query("agentProfiles").collect();
+    const dryRun = args.dryRun ?? false;
+
+    let updated = 0;
+    let clearedProviderUserId = 0;
+    let clearedSoulMd = 0;
+    let clearedClientMd = 0;
+    let clearedSkills = 0;
+    const updatedAgentKeys: Array<string> = [];
+
+    for (const profile of profiles) {
+      const patch: {
+        providerUserId?: undefined;
+        soulMd?: undefined;
+        clientMd?: undefined;
+        skills?: undefined;
+      } = {};
+      let shouldPatch = false;
+
+      if (profile.providerUserId !== undefined) {
+        patch.providerUserId = undefined;
+        clearedProviderUserId += 1;
+        shouldPatch = true;
+      }
+      if (profile.soulMd !== undefined) {
+        patch.soulMd = undefined;
+        clearedSoulMd += 1;
+        shouldPatch = true;
+      }
+      if (profile.clientMd !== undefined) {
+        patch.clientMd = undefined;
+        clearedClientMd += 1;
+        shouldPatch = true;
+      }
+      if (profile.skills !== undefined) {
+        patch.skills = undefined;
+        clearedSkills += 1;
+        shouldPatch = true;
+      }
+
+      if (!shouldPatch) continue;
+
+      updated += 1;
+      updatedAgentKeys.push(profile.agentKey);
+      if (!dryRun) {
+        await ctx.db.patch(profile._id, patch);
+      }
+    }
+
+    return {
+      dryRun,
+      scanned: profiles.length,
+      updated,
+      unchanged: profiles.length - updated,
+      clearedProviderUserId,
+      clearedSoulMd,
+      clearedClientMd,
+      clearedSkills,
+      updatedAgentKeys,
+    };
   },
 });
 
@@ -378,9 +474,9 @@ export const getProviderRuntimeConfig = internalQuery({
   handler: async (ctx) => {
     const row = await ctx.db
       .query("runtimeConfig")
-      .withIndex("by_key", (q) => q.eq("key", "provider"))
+      .withIndex("by_key", (q) => q.eq("key", RUNTIME_CONFIG_KEYS.provider))
       .unique();
-    if (!row) {
+    if (!row?.providerConfig) {
       return null;
     }
     return row.providerConfig;
@@ -397,11 +493,11 @@ export const upsertProviderRuntimeConfig = internalMutation({
     const nowMs = args.nowMs ?? Date.now();
     const existing = await ctx.db
       .query("runtimeConfig")
-      .withIndex("by_key", (q) => q.eq("key", "provider"))
+      .withIndex("by_key", (q) => q.eq("key", RUNTIME_CONFIG_KEYS.provider))
       .unique();
     if (!existing) {
       await ctx.db.insert("runtimeConfig", {
-        key: "provider",
+        key: RUNTIME_CONFIG_KEYS.provider,
         providerConfig: args.providerConfig,
         updatedAt: nowMs,
       });
@@ -421,9 +517,9 @@ export const providerRuntimeConfig = query({
   handler: async (ctx) => {
     const row = await ctx.db
       .query("runtimeConfig")
-      .withIndex("by_key", (q) => q.eq("key", "provider"))
+      .withIndex("by_key", (q) => q.eq("key", RUNTIME_CONFIG_KEYS.provider))
       .unique();
-    if (!row) {
+    if (!row?.providerConfig) {
       return null;
     }
     return row.providerConfig;
@@ -440,11 +536,11 @@ export const setProviderRuntimeConfig = mutation({
     const nowMs = args.nowMs ?? Date.now();
     const existing = await ctx.db
       .query("runtimeConfig")
-      .withIndex("by_key", (q) => q.eq("key", "provider"))
+      .withIndex("by_key", (q) => q.eq("key", RUNTIME_CONFIG_KEYS.provider))
       .unique();
     if (!existing) {
       await ctx.db.insert("runtimeConfig", {
-        key: "provider",
+        key: RUNTIME_CONFIG_KEYS.provider,
         providerConfig: args.providerConfig,
         updatedAt: nowMs,
       });
@@ -452,6 +548,106 @@ export const setProviderRuntimeConfig = mutation({
     }
     await ctx.db.patch(existing._id, {
       providerConfig: args.providerConfig,
+      updatedAt: nowMs,
+    });
+    return null;
+  },
+});
+
+export const getMessageRuntimeConfig = internalQuery({
+  args: {},
+  returns: v.union(v.null(), messageRuntimeConfigValidator),
+  handler: async (ctx) => {
+    const row = await ctx.db
+      .query("runtimeConfig")
+      .withIndex("by_key", (q) => q.eq("key", RUNTIME_CONFIG_KEYS.message))
+      .unique();
+    if (!row?.messageConfig) {
+      return null;
+    }
+    return row.messageConfig;
+  },
+});
+
+export const upsertMessageRuntimeConfig = internalMutation({
+  args: {
+    messageConfig: messageRuntimeConfigValidator,
+    nowMs: v.optional(v.number()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const nowMs = args.nowMs ?? Date.now();
+    const normalizedMessageConfig = normalizeMessageRuntimeConfig(args.messageConfig);
+    const existing = await ctx.db
+      .query("runtimeConfig")
+      .withIndex("by_key", (q) => q.eq("key", RUNTIME_CONFIG_KEYS.message))
+      .unique();
+    if (normalizedMessageConfig === null) {
+      if (existing) {
+        await ctx.db.delete(existing._id);
+      }
+      return null;
+    }
+    if (!existing) {
+      await ctx.db.insert("runtimeConfig", {
+        key: RUNTIME_CONFIG_KEYS.message,
+        messageConfig: normalizedMessageConfig,
+        updatedAt: nowMs,
+      });
+      return null;
+    }
+    await ctx.db.patch(existing._id, {
+      messageConfig: normalizedMessageConfig,
+      updatedAt: nowMs,
+    });
+    return null;
+  },
+});
+
+export const messageRuntimeConfig = query({
+  args: {},
+  returns: v.union(v.null(), messageRuntimeConfigValidator),
+  handler: async (ctx) => {
+    const row = await ctx.db
+      .query("runtimeConfig")
+      .withIndex("by_key", (q) => q.eq("key", RUNTIME_CONFIG_KEYS.message))
+      .unique();
+    if (!row?.messageConfig) {
+      return null;
+    }
+    return row.messageConfig;
+  },
+});
+
+export const setMessageRuntimeConfig = mutation({
+  args: {
+    messageConfig: messageRuntimeConfigValidator,
+    nowMs: v.optional(v.number()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const nowMs = args.nowMs ?? Date.now();
+    const normalizedMessageConfig = normalizeMessageRuntimeConfig(args.messageConfig);
+    const existing = await ctx.db
+      .query("runtimeConfig")
+      .withIndex("by_key", (q) => q.eq("key", RUNTIME_CONFIG_KEYS.message))
+      .unique();
+    if (normalizedMessageConfig === null) {
+      if (existing) {
+        await ctx.db.delete(existing._id);
+      }
+      return null;
+    }
+    if (!existing) {
+      await ctx.db.insert("runtimeConfig", {
+        key: RUNTIME_CONFIG_KEYS.message,
+        messageConfig: normalizedMessageConfig,
+        updatedAt: nowMs,
+      });
+      return null;
+    }
+    await ctx.db.patch(existing._id, {
+      messageConfig: normalizedMessageConfig,
       updatedAt: nowMs,
     });
     return null;
@@ -2039,6 +2235,36 @@ async function resolveBridgeRuntimeConfig(
     serviceKey,
     serviceKeySecretRef,
   };
+}
+
+function appendSystemPromptToMessage(messageText: string, systemPrompt?: string): string {
+  const normalizedSystemPrompt = normalizeSystemPrompt(systemPrompt);
+  if (normalizedSystemPrompt === null) {
+    return messageText;
+  }
+  const normalizedMessageText = messageText.trimEnd();
+  if (normalizedMessageText.length === 0) {
+    return normalizedSystemPrompt;
+  }
+  return `${normalizedMessageText}\n\n${normalizedSystemPrompt}`;
+}
+
+function normalizeMessageRuntimeConfig(
+  messageConfig: { systemPrompt?: string } | null | undefined,
+): { systemPrompt?: string } | null {
+  const systemPrompt = normalizeSystemPrompt(messageConfig?.systemPrompt);
+  if (systemPrompt === null) {
+    return null;
+  }
+  return { systemPrompt };
+}
+
+function normalizeSystemPrompt(systemPrompt?: string | null): string | null {
+  if (typeof systemPrompt !== "string") {
+    return null;
+  }
+  const normalizedSystemPrompt = systemPrompt.trim();
+  return normalizedSystemPrompt.length > 0 ? normalizedSystemPrompt : null;
 }
 
 function getBridgeSecretRefsForProfile(

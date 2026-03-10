@@ -56,6 +56,10 @@ const pushScheduleValidator = v.union(
     time: v.string(),
   }),
 );
+
+const messageRuntimeConfigValidator = v.object({
+  systemPrompt: v.optional(v.string()),
+});
 export {
   bridgeFunctionKeyFromToolName,
   executeBridgeFunction,
@@ -105,6 +109,23 @@ export function exposeApi(
       handler: async (ctx, args) => {
         await options.auth(ctx, { type: "write" });
         await ctx.runMutation((component.queue as any).setProviderRuntimeConfig, args);
+        return null;
+      },
+    }),
+    getMessageRuntimeConfig: queryGeneric({
+      args: {},
+      handler: async (ctx) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runQuery((component.queue as any).messageRuntimeConfig, {});
+      },
+    }),
+    setMessageRuntimeConfig: mutationGeneric({
+      args: {
+        messageConfig: messageRuntimeConfigValidator,
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "write" });
+        await ctx.runMutation((component.queue as any).setMessageRuntimeConfig, args);
         return null;
       },
     }),

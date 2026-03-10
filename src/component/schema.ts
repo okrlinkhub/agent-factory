@@ -6,9 +6,9 @@ export default defineSchema({
     agentKey: v.string(),
     providerUserId: v.optional(v.string()),
     version: v.string(),
-    soulMd: v.string(),
+    soulMd: v.optional(v.string()),
     clientMd: v.optional(v.string()),
-    skills: v.array(v.string()),
+    skills: v.optional(v.array(v.string())),
     secretsRef: v.array(v.string()),
     bridgeConfig: v.optional(
       v.object({
@@ -134,16 +134,23 @@ export default defineSchema({
 
   runtimeConfig: defineTable({
     key: v.string(),
-    providerConfig: v.object({
-      kind: v.union(v.literal("fly"), v.literal("runpod"), v.literal("ecs")),
-      appName: v.string(),
-      organizationSlug: v.string(),
-      image: v.string(),
-      region: v.string(),
-      volumeName: v.string(),
-      volumePath: v.string(),
-      volumeSizeGb: v.number(),
-    }),
+    providerConfig: v.optional(
+      v.object({
+        kind: v.union(v.literal("fly"), v.literal("runpod"), v.literal("ecs")),
+        appName: v.string(),
+        organizationSlug: v.string(),
+        image: v.string(),
+        region: v.string(),
+        volumeName: v.string(),
+        volumePath: v.string(),
+        volumeSizeGb: v.number(),
+      }),
+    ),
+    messageConfig: v.optional(
+      v.object({
+        systemPrompt: v.optional(v.string()),
+      }),
+    ),
     updatedAt: v.number(),
   }).index("by_key", ["key"]),
 

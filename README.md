@@ -520,3 +520,5 @@ References:
 npm i
 npm run dev
 ```
+
+Upgrade note: version `0.2.14` makes `agentProfiles.providerUserId`, `agentProfiles.soulMd`, `agentProfiles.clientMd`, and `agentProfiles.skills` optional only to let you clean them safely. Before upgrading to version `0.2.15`, where those fields are expected to be removed from the schema, install `0.2.14`, run `components.agentFactory.lib.clearDeprecatedAgentProfileFields` from Convex Dashboard, and make sure a second run returns `updated = 0`. This avoids schema validation issues caused by leftover stored values during the upgrade to `0.2.15`.

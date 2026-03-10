@@ -52,6 +52,181 @@ describe("component lib", () => {
     expect(claimed?.conversationId).toBe("telegram:chat:1");
   });
 
+  test("minimal agent profile should work when payload provides providerUserId", async () => {
+    const t = initConvexTest();
+    await t.mutation(api.queue.upsertAgentProfile, {
+      agentKey: "minimal-agent",
+      version: "1.0.0",
+      secretsRef: [],
+      enabled: true,
+    });
+
+    const messageId = await t.mutation(api.lib.enqueue, {
+      conversationId: "telegram:chat:minimal",
+      agentKey: "minimal-agent",
+      payload: {
+        provider: "telegram",
+        providerUserId: "u-minimal-1",
+        messageText: "hello",
+      },
+    });
+
+    const claim = await t.mutation(api.lib.claim, {
+      workerId: "worker-minimal-1",
+    });
+    expect(claim?.messageId).toBe(messageId);
+    expect(claim?.payload.providerUserId).toBe("u-minimal-1");
+
+    const bundle = await t.query(api.lib.getHydrationBundle, {
+      messageId,
+      workspaceId: "default",
+    });
+    expect(bundle).not.toBeNull();
+    expect(bundle?.payload.providerUserId).toBe("u-minimal-1");
+    expect(bundle?.bridgeRuntimeConfig).toBeNull();
+  });
+
+  test("enqueue should append global system prompt to queued message", async () => {
+    const t = initConvexTest();
+    await t.mutation(api.queue.upsertAgentProfile, {
+      agentKey: "system-prompt-agent",
+      version: "1.0.0",
+      secretsRef: [],
+      enabled: true,
+    });
+    await t.mutation(api.lib.setMessageRuntimeConfig, {
+      messageConfig: {
+        systemPrompt: "  Rispondi sempre con un breve riassunto finale.  ",
+      },
+    });
+
+    const storedMessageConfig = await t.query(api.lib.messageRuntimeConfig, {});
+    expect(storedMessageConfig).toEqual({
+      systemPrompt: "Rispondi sempre con un breve riassunto finale.",
+    });
+
+    const messageId = await t.mutation(api.lib.enqueue, {
+      conversationId: "telegram:chat:system-prompt",
+      agentKey: "system-prompt-agent",
+      payload: {
+        provider: "telegram",
+        providerUserId: "u-system-prompt-1",
+        messageText: "Come va?",
+      },
+    });
+
+    const claim = await t.mutation(api.lib.claim, {
+      workerId: "worker-system-prompt-1",
+    });
+    expect(claim?.messageId).toBe(messageId);
+    expect(claim?.payload.messageText).toBe(
+      "Come va?\n\nRispondi sempre con un breve riassunto finale.",
+    );
+  });
+
+  test("blank global system prompt should not modify queued messages", async () => {
+    const t = initConvexTest();
+    await t.mutation(api.queue.upsertAgentProfile, {
+      agentKey: "blank-system-prompt-agent",
+      version: "1.0.0",
+      secretsRef: [],
+      enabled: true,
+    });
+    await t.mutation(api.lib.setMessageRuntimeConfig, {
+      messageConfig: {
+        systemPrompt: "   ",
+      },
+    });
+
+    const storedMessageConfig = await t.query(api.lib.messageRuntimeConfig, {});
+    expect(storedMessageConfig).toBeNull();
+
+    const messageId = await t.mutation(api.lib.enqueue, {
+      conversationId: "telegram:chat:blank-system-prompt",
+      agentKey: "blank-system-prompt-agent",
+      payload: {
+        provider: "telegram",
+        providerUserId: "u-blank-system-prompt-1",
+        messageText: "hello",
+      },
+    });
+
+    const claim = await t.mutation(api.lib.claim, {
+      workerId: "worker-blank-system-prompt-1",
+    });
+    expect(claim?.messageId).toBe(messageId);
+    expect(claim?.payload.messageText).toBe("hello");
+  });
+
+  test("enqueue should fail when providerUserId is blank in both profile and payload", async () => {
+    const t = initConvexTest();
+    await t.mutation(api.queue.upsertAgentProfile, {
+      agentKey: "missing-provider-user-agent",
+      version: "1.0.0",
+      providerUserId: "   ",
+      secretsRef: [],
+      enabled: true,
+    });
+
+    await expect(
+      t.mutation(api.queue.enqueueMessage, {
+        conversationId: "telegram:chat:missing-provider-user",
+        agentKey: "missing-provider-user-agent",
+        payload: {
+          provider: "telegram",
+          providerUserId: "   ",
+          messageText: "hello",
+        },
+      }),
+    ).rejects.toThrow("providerUserId is required but missing");
+  });
+
+  test("clearDeprecatedAgentProfileFields should remove deprecated profile fields", async () => {
+    const t = initConvexTest();
+    await t.mutation(api.queue.upsertAgentProfile, {
+      agentKey: "cleanup-agent",
+      version: "1.0.0",
+      providerUserId: "legacy-user-1",
+      soulMd: "# Legacy Soul",
+      clientMd: "# Legacy Client",
+      skills: ["agent-bridge"],
+      secretsRef: [],
+      enabled: true,
+    });
+    await t.mutation(api.queue.upsertAgentProfile, {
+      agentKey: "already-clean-agent",
+      version: "1.0.0",
+      secretsRef: [],
+      enabled: true,
+    });
+
+    const dryRun = await t.mutation((api.lib as any).clearDeprecatedAgentProfileFields, {
+      dryRun: true,
+    });
+    expect(dryRun.dryRun).toBe(true);
+    expect(dryRun.scanned).toBe(2);
+    expect(dryRun.updated).toBe(1);
+    expect(dryRun.unchanged).toBe(1);
+    expect(dryRun.clearedProviderUserId).toBe(1);
+    expect(dryRun.clearedSoulMd).toBe(1);
+    expect(dryRun.clearedClientMd).toBe(1);
+    expect(dryRun.clearedSkills).toBe(1);
+    expect(dryRun.updatedAgentKeys).toEqual(["cleanup-agent"]);
+
+    const cleanup = await t.mutation((api.lib as any).clearDeprecatedAgentProfileFields, {});
+    expect(cleanup.dryRun).toBe(false);
+    expect(cleanup.updated).toBe(1);
+    expect(cleanup.updatedAgentKeys).toEqual(["cleanup-agent"]);
+
+    const secondPass = await t.mutation((api.lib as any).clearDeprecatedAgentProfileFields, {});
+    expect(secondPass.updated).toBe(0);
+    expect(secondPass.unchanged).toBe(2);
+    expect(secondPass.clearedProviderUserId).toBe(0);
+    expect(secondPass.clearedSoulMd).toBe(0);
+    expect(secondPass.clearedClientMd).toBe(0);
+    expect(secondPass.clearedSkills).toBe(0);
+  });
+
   test("identity binding should resolve, rebind and revoke", async () => {
     const t = initConvexTest();
     await t.mutation(api.queue.upsertAgentProfile, {
