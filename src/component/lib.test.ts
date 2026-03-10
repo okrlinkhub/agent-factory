@@ -15,21 +15,54 @@ const TEST_PROVIDER_CONFIG = {
   volumeSizeGb: 10,
 };
 
+function stableHashBase36(input: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= input.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function buildDedicatedVolumeName(prefix: string, workerId: string) {
+  const sanitize = (value: string) =>
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9_]/g, "_")
+      .replace(/_+/g, "_")
+      .replace(/^_+|_+$/g, "");
+  const normalizedPrefix = sanitize(prefix) || "openclaw";
+  const normalizedWorker = sanitize(workerId) || "worker";
+  const workerHash = stableHashBase36(normalizedWorker).slice(0, 8);
+  const maxPrefixLen = 30 - 1 - workerHash.length;
+  return `${normalizedPrefix.slice(0, Math.max(1, maxPrefixLen))}_${workerHash}`;
+}
+
+function jsonResponse(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+function emptyResponse(status = 204) {
+  return new Response(null, { status });
+}
+
 describe("component lib", () => {
   beforeEach(async () => {
     vi.useFakeTimers();
   });
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
   test("enqueue and claim should respect queue flow", async () => {
     const t = initConvexTest();
     await t.mutation(api.queue.upsertAgentProfile, {
       agentKey: "support-agent",
       version: "1.0.0",
-      soulMd: "# Soul",
-      clientMd: "# Client",
-      skills: ["agent-bridge"],
       secretsRef: ["telegram.botToken"],
       enabled: true,
     });
@@ -158,12 +191,11 @@ describe("component lib", () => {
     expect(claim?.payload.messageText).toBe("hello");
   });
 
-  test("enqueue should fail when providerUserId is blank in both profile and payload", async () => {
+  test("enqueue should fail when providerUserId is blank in payload", async () => {
     const t = initConvexTest();
     await t.mutation(api.queue.upsertAgentProfile, {
       agentKey: "missing-provider-user-agent",
       version: "1.0.0",
-      providerUserId: "   ",
       secretsRef: [],
       enabled: true,
     });
@@ -178,53 +210,7 @@ describe("component lib", () => {
           messageText: "hello",
         },
       }),
-    ).rejects.toThrow("providerUserId is required but missing");
-  });
-
-  test("clearDeprecatedAgentProfileFields should remove deprecated profile fields", async () => {
-    const t = initConvexTest();
-    await t.mutation(api.queue.upsertAgentProfile, {
-      agentKey: "cleanup-agent",
-      version: "1.0.0",
-      providerUserId: "legacy-user-1",
-      soulMd: "# Legacy Soul",
-      clientMd: "# Legacy Client",
-      skills: ["agent-bridge"],
-      secretsRef: [],
-      enabled: true,
-    });
-    await t.mutation(api.queue.upsertAgentProfile, {
-      agentKey: "already-clean-agent",
-      version: "1.0.0",
-      secretsRef: [],
-      enabled: true,
-    });
-
-    const dryRun = await t.mutation((api.lib as any).clearDeprecatedAgentProfileFields, {
-      dryRun: true,
-    });
-    expect(dryRun.dryRun).toBe(true);
-    expect(dryRun.scanned).toBe(2);
-    expect(dryRun.updated).toBe(1);
-    expect(dryRun.unchanged).toBe(1);
-    expect(dryRun.clearedProviderUserId).toBe(1);
-    expect(dryRun.clearedSoulMd).toBe(1);
-    expect(dryRun.clearedClientMd).toBe(1);
-    expect(dryRun.clearedSkills).toBe(1);
-    expect(dryRun.updatedAgentKeys).toEqual(["cleanup-agent"]);
-
-    const cleanup = await t.mutation((api.lib as any).clearDeprecatedAgentProfileFields, {});
-    expect(cleanup.dryRun).toBe(false);
-    expect(cleanup.updated).toBe(1);
-    expect(cleanup.updatedAgentKeys).toEqual(["cleanup-agent"]);
-
-    const secondPass = await t.mutation((api.lib as any).clearDeprecatedAgentProfileFields, {});
-    expect(secondPass.updated).toBe(0);
-    expect(secondPass.unchanged).toBe(2);
-    expect(secondPass.clearedProviderUserId).toBe(0);
-    expect(secondPass.clearedSoulMd).toBe(0);
-    expect(secondPass.clearedClientMd).toBe(0);
-    expect(secondPass.clearedSkills).toBe(0);
+    ).rejects.toThrow("providerUserId is required but missing in payload");
   });
 
   test("identity binding should resolve, rebind and revoke", async () => {
@@ -232,18 +218,12 @@ describe("component lib", () => {
     await t.mutation(api.queue.upsertAgentProfile, {
       agentKey: "agent-a",
       version: "1.0.0",
-      soulMd: "# Soul",
-      clientMd: "# Client",
-      skills: ["agent-bridge"],
       secretsRef: [],
       enabled: true,
     });
     await t.mutation(api.queue.upsertAgentProfile, {
       agentKey: "agent-b",
       version: "1.0.0",
-      soulMd: "# Soul",
-      clientMd: "# Client",
-      skills: ["agent-bridge"],
       secretsRef: [],
       enabled: true,
     });
@@ -298,9 +278,6 @@ describe("component lib", () => {
     await t.mutation(api.queue.upsertAgentProfile, {
       agentKey: "support-agent",
       version: "1.0.0",
-      soulMd: "# Soul",
-      clientMd: "# Client",
-      skills: ["agent-bridge"],
       secretsRef: [],
       enabled: true,
     });
@@ -332,14 +309,93 @@ describe("component lib", () => {
     expect(worker?.scheduledShutdownAt).toBe(now + 300_000);
   });
 
+  test("idle shutdown should force worker to stopped and prevent reactivation", async () => {
+    const t = initConvexTest();
+    const claimTime = Date.UTC(2026, 0, 1, 12, 0, 0);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/machines`) && method === "GET") {
+          return jsonResponse([]);
+        }
+        if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/volumes`) && method === "GET") {
+          return jsonResponse([]);
+        }
+        throw new Error(`Unexpected fetch ${method} ${url}`);
+      }),
+    );
+    vi.setSystemTime(claimTime);
+    await t.mutation(api.queue.upsertAgentProfile, {
+      agentKey: "support-agent",
+      version: "1.0.0",
+      secretsRef: [],
+      enabled: true,
+    });
+
+    const messageId = await t.mutation(api.lib.enqueue, {
+      conversationId: "telegram:chat:forced-stop",
+      agentKey: "support-agent",
+      payload: {
+        provider: "telegram",
+        providerUserId: "u-stop",
+        messageText: "stop me",
+      },
+    });
+    const claim = await t.mutation(api.lib.claim, { workerId: "worker-stop-force-1" });
+    expect(claim?.messageId).toBe(messageId);
+
+    const completionTime = claimTime + 60_000;
+    vi.setSystemTime(completionTime);
+    await t.mutation(api.lib.complete, {
+      workerId: "worker-stop-force-1",
+      messageId,
+      leaseId: claim?.leaseId ?? "",
+      providerConfig: TEST_PROVIDER_CONFIG,
+    } as any);
+
+    const dueTime = claimTime + 300_001;
+    vi.setSystemTime(dueTime);
+    const shutdown = await t.action(api.scheduler.checkIdleShutdowns, {
+      nowMs: dueTime,
+      flyApiToken: "fly-token",
+      providerConfig: TEST_PROVIDER_CONFIG,
+    });
+    expect(shutdown.stopped).toBe(1);
+
+    const workers = await t.query((internal.queue as any).listWorkersForScheduler, {});
+    const worker = workers.find((row: { workerId: string }) => row.workerId === "worker-stop-force-1");
+    expect(worker?.status).toBe("stopped");
+    expect(worker?.stoppedAt).toBe(dueTime);
+
+    const control = await t.query(api.queue.getWorkerControlState as any, {
+      workerId: "worker-stop-force-1",
+    });
+    expect(control.shouldStop).toBe(true);
+
+    const newMessageId = await t.mutation(api.lib.enqueue, {
+      conversationId: "telegram:chat:forced-stop:2",
+      agentKey: "support-agent",
+      payload: {
+        provider: "telegram",
+        providerUserId: "u-stop",
+        messageText: "new message",
+      },
+    });
+    expect(newMessageId).toBeDefined();
+
+    const reactivatedClaim = await t.mutation(api.lib.claim, {
+      workerId: "worker-stop-force-1",
+    });
+    expect(reactivatedClaim).toBeNull();
+  });
+
   test("hydration bundle should include resolved agent-bridge runtime config", async () => {
     const t = initConvexTest();
     await t.mutation(api.queue.upsertAgentProfile, {
       agentKey: "bridge-agent",
       version: "1.0.0",
-      soulMd: "# Soul",
-      clientMd: "# Client",
-      skills: ["agent-bridge"],
       secretsRef: [],
       bridgeConfig: {
         enabled: true,
@@ -406,14 +462,239 @@ describe("component lib", () => {
     expect(controlUnknown.shouldStop).toBe(true);
   });
 
+  test("worker control state should stop active workers past scheduled shutdown", async () => {
+    const t = initConvexTest();
+    const nowMs = Date.UTC(2026, 0, 1, 14, 0, 0);
+    vi.setSystemTime(nowMs);
+    await t.mutation(internal.queue.upsertWorkerState, {
+      workerId: "worker-overdue-1",
+      provider: "fly",
+      status: "active",
+      load: 0,
+      nowMs: nowMs - 60_000,
+      scheduledShutdownAt: nowMs - 1,
+    });
+    const control = await t.query(api.queue.getWorkerControlState as any, {
+      workerId: "worker-overdue-1",
+    });
+    expect(control.shouldStop).toBe(true);
+  });
+
+  test("shutdown teardown should wait for final snapshot before deleting worker volume", async () => {
+    const t = initConvexTest();
+    const workerId = "worker-cleanup-1";
+    const machineId = "machine-cleanup-1";
+    const volumeId = "vol-cleanup-1";
+    const volumeName = buildDedicatedVolumeName(TEST_PROVIDER_CONFIG.volumeName, workerId);
+    const claimTime = Date.UTC(2026, 0, 1, 15, 0, 0);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/machines`) && method === "GET") {
+        return jsonResponse([
+          {
+            id: machineId,
+            name: workerId,
+            region: TEST_PROVIDER_CONFIG.region,
+            state: "started",
+            config: { image: TEST_PROVIDER_CONFIG.image },
+          },
+        ]);
+      }
+      if (url.endsWith(`/machines/${machineId}/cordon`) && method === "POST") {
+        return emptyResponse();
+      }
+      if (url.endsWith(`/machines/${machineId}/stop`) && method === "POST") {
+        return emptyResponse();
+      }
+      if (url.endsWith(`/machines/${machineId}`) && method === "DELETE") {
+        return emptyResponse();
+      }
+      if (url.endsWith(`/machines/${machineId}`) && method === "GET") {
+        return jsonResponse({
+          id: machineId,
+          config: {
+            mounts: [{ volume: volumeId, path: TEST_PROVIDER_CONFIG.volumePath }],
+          },
+        });
+      }
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/volumes`) && method === "GET") {
+        return jsonResponse([
+          {
+            id: volumeId,
+            name: volumeName,
+            region: TEST_PROVIDER_CONFIG.region,
+          },
+        ]);
+      }
+      if (url.endsWith(`/volumes/${volumeId}`) && method === "DELETE") {
+        return emptyResponse();
+      }
+      throw new Error(`Unexpected fetch ${method} ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.setSystemTime(claimTime);
+
+    await t.mutation(api.queue.upsertAgentProfile, {
+      agentKey: "support-agent",
+      version: "1.0.0",
+      secretsRef: [],
+      enabled: true,
+    });
+    const messageId = await t.mutation(api.lib.enqueue, {
+      conversationId: "telegram:chat:cleanup",
+      agentKey: "support-agent",
+      payload: {
+        provider: "telegram",
+        providerUserId: "u-clean",
+        messageText: "cleanup",
+      },
+    });
+    const claim = await t.mutation(api.lib.claim, { workerId });
+    expect(claim?.messageId).toBe(messageId);
+
+    await t.mutation(internal.queue.upsertWorkerState, {
+      workerId,
+      provider: "fly",
+      status: "active",
+      load: 1,
+      nowMs: claimTime,
+      machineId,
+      appName: TEST_PROVIDER_CONFIG.appName,
+      region: TEST_PROVIDER_CONFIG.region,
+    });
+
+    const completionTime = claimTime + 60_000;
+    vi.setSystemTime(completionTime);
+    await t.mutation(api.queue.completeJob as any, {
+      workerId,
+      messageId,
+      leaseId: claim?.leaseId ?? "",
+      nowMs: completionTime,
+      providerConfig: TEST_PROVIDER_CONFIG,
+    });
+
+    const dueTime = claimTime + 300_001;
+    vi.setSystemTime(dueTime);
+    const firstPass = await t.action(api.scheduler.checkIdleShutdowns, {
+      nowMs: dueTime,
+      flyApiToken: "fly-token",
+      providerConfig: TEST_PROVIDER_CONFIG,
+    });
+    expect(firstPass.stopped).toBe(1);
+    expect(firstPass.pending).toBe(1);
+
+    const prematureDeleteCalls = fetchMock.mock.calls.filter((call) =>
+      String(call[0]).includes(`/volumes/${volumeId}`),
+    );
+    expect(prematureDeleteCalls).toHaveLength(0);
+
+    const snapshot = await t.mutation(api.queue.prepareDataSnapshotUpload as any, {
+      workerId,
+      workspaceId: "default",
+      agentKey: "support-agent",
+      conversationId: "telegram:chat:cleanup",
+      reason: "drain",
+      nowMs: dueTime + 1,
+    });
+    const storageId = await t.run(async (ctx) => {
+      return await ctx.storage.store(new Blob(["snapshot-ready"]));
+    });
+    const finalized = await t.mutation(api.queue.finalizeDataSnapshotUpload as any, {
+      workerId,
+      snapshotId: snapshot.snapshotId,
+      storageId,
+      sha256: "deadbeef",
+      sizeBytes: 14,
+      nowMs: dueTime + 2,
+    });
+    expect(finalized).toBe(true);
+
+    const secondPass = await t.action(api.scheduler.checkIdleShutdowns, {
+      nowMs: dueTime + 10_000,
+      flyApiToken: "fly-token",
+      providerConfig: TEST_PROVIDER_CONFIG,
+    });
+    expect(secondPass.pending).toBe(0);
+
+    const deleteMachineCalls = fetchMock.mock.calls.filter(
+      (call) =>
+        String(call[0]).endsWith(`/machines/${machineId}`) &&
+        ((call[1] as RequestInit | undefined)?.method ?? "GET") === "DELETE",
+    );
+    const deleteVolumeCalls = fetchMock.mock.calls.filter(
+      (call) =>
+        String(call[0]).endsWith(`/volumes/${volumeId}`) &&
+        ((call[1] as RequestInit | undefined)?.method ?? "GET") === "DELETE",
+    );
+    expect(deleteMachineCalls).toHaveLength(1);
+    expect(deleteVolumeCalls).toHaveLength(1);
+  });
+
+  test("cleanup should remove orphan worker volumes when the machine is already gone", async () => {
+    const t = initConvexTest();
+    const workerId = "worker-orphan-1";
+    const volumeId = "vol-orphan-1";
+    const volumeName = buildDedicatedVolumeName(TEST_PROVIDER_CONFIG.volumeName, workerId);
+    const nowMs = Date.UTC(2026, 0, 1, 16, 0, 0);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/machines`) && method === "GET") {
+        return jsonResponse([]);
+      }
+      if (url.endsWith(`/machines/machine-orphan-1`) && method === "GET") {
+        return new Response("not found", { status: 404 });
+      }
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/volumes`) && method === "GET") {
+        return jsonResponse([
+          {
+            id: volumeId,
+            name: volumeName,
+            region: TEST_PROVIDER_CONFIG.region,
+          },
+        ]);
+      }
+      if (url.endsWith(`/volumes/${volumeId}`) && method === "DELETE") {
+        return emptyResponse();
+      }
+      throw new Error(`Unexpected fetch ${method} ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await t.mutation(internal.queue.upsertWorkerState, {
+      workerId,
+      provider: "fly",
+      status: "active",
+      load: 0,
+      nowMs,
+      scheduledShutdownAt: nowMs - 1,
+      machineId: "machine-orphan-1",
+      appName: TEST_PROVIDER_CONFIG.appName,
+      region: TEST_PROVIDER_CONFIG.region,
+    });
+
+    const result = await t.action(api.scheduler.checkIdleShutdowns, {
+      nowMs,
+      flyApiToken: "fly-token",
+      providerConfig: TEST_PROVIDER_CONFIG,
+    });
+    expect(result.stopped).toBe(1);
+    expect(result.pending).toBe(0);
+
+    const deleteVolumeCalls = fetchMock.mock.calls.filter(
+      (call) =>
+        String(call[0]).endsWith(`/volumes/${volumeId}`) &&
+        ((call[1] as RequestInit | undefined)?.method ?? "GET") === "DELETE",
+    );
+    expect(deleteVolumeCalls).toHaveLength(1);
+  });
+
   test("scheduler count includes queued and in-progress conversations", async () => {
     const t = initConvexTest();
     await t.mutation(api.queue.upsertAgentProfile, {
       agentKey: "support-agent",
       version: "1.0.0",
-      soulMd: "# Soul",
-      clientMd: "# Client",
-      skills: ["agent-bridge"],
       secretsRef: [],
       enabled: true,
     });
@@ -491,9 +772,6 @@ describe("component lib", () => {
     await t.mutation(api.queue.upsertAgentProfile, {
       agentKey: "support-agent",
       version: "1.0.0",
-      soulMd: "# Soul",
-      clientMd: "# Client",
-      skills: ["agent-bridge"],
       secretsRef: [],
       enabled: true,
     });
@@ -564,9 +842,6 @@ describe("component lib", () => {
     await t.mutation(api.queue.upsertAgentProfile, {
       agentKey: "support-agent",
       version: "1.0.0",
-      soulMd: "# Soul",
-      clientMd: "# Client",
-      skills: ["agent-bridge"],
       secretsRef: [],
       enabled: true,
     });
@@ -637,9 +912,6 @@ describe("component lib", () => {
     await t.mutation(api.queue.upsertAgentProfile, {
       agentKey: "push-agent",
       version: "1.0.0",
-      soulMd: "# Soul",
-      clientMd: "# Client",
-      skills: [],
       secretsRef: [],
       enabled: true,
     });
@@ -692,9 +964,6 @@ describe("component lib", () => {
     await t.mutation(api.queue.upsertAgentProfile, {
       agentKey: "push-telegram-manual-agent",
       version: "1.0.0",
-      soulMd: "# Soul",
-      clientMd: "# Client",
-      skills: [],
       secretsRef: [],
       enabled: true,
     });
@@ -738,9 +1007,6 @@ describe("component lib", () => {
     await t.mutation(api.queue.upsertAgentProfile, {
       agentKey: "push-telegram-scheduled-agent",
       version: "1.0.0",
-      soulMd: "# Soul",
-      clientMd: "# Client",
-      skills: [],
       secretsRef: [],
       enabled: true,
     });
@@ -787,18 +1053,12 @@ describe("component lib", () => {
     await t.mutation(api.queue.upsertAgentProfile, {
       agentKey: "broadcast-agent-a",
       version: "1.0.0",
-      soulMd: "# Soul",
-      clientMd: "# Client",
-      skills: [],
       secretsRef: [],
       enabled: true,
     });
     await t.mutation(api.queue.upsertAgentProfile, {
       agentKey: "broadcast-agent-b",
       version: "1.0.0",
-      soulMd: "# Soul",
-      clientMd: "# Client",
-      skills: [],
       secretsRef: [],
       enabled: true,
     });

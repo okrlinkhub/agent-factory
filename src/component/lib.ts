@@ -1,6 +1,5 @@
 export {
   upsertAgentProfile as configureAgent,
-  clearDeprecatedAgentProfileFields,
   importPlaintextSecret as importSecret,
   getSecretsStatus as secretStatus,
   providerRuntimeConfig,

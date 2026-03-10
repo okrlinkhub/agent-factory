@@ -260,23 +260,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         },
         Name
       >;
-      clearDeprecatedAgentProfileFields: FunctionReference<
-        "mutation",
-        "internal",
-        { dryRun?: boolean },
-        {
-          clearedClientMd: number;
-          clearedProviderUserId: number;
-          clearedSkills: number;
-          clearedSoulMd: number;
-          dryRun: boolean;
-          scanned: number;
-          unchanged: number;
-          updated: number;
-          updatedAgentKeys: Array<string>;
-        },
-        Name
-      >;
       complete: FunctionReference<
         "mutation",
         "internal",
@@ -312,12 +295,8 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             serviceId?: string;
             serviceKeySecretRef?: string;
           };
-          clientMd?: string;
           enabled: boolean;
-          providerUserId?: string;
           secretsRef: Array<string>;
-          skills?: Array<string>;
-          soulMd?: string;
           version: string;
         },
         string,
@@ -1273,23 +1252,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         },
         Name
       >;
-      clearDeprecatedAgentProfileFields: FunctionReference<
-        "mutation",
-        "internal",
-        { dryRun?: boolean },
-        {
-          clearedClientMd: number;
-          clearedProviderUserId: number;
-          clearedSkills: number;
-          clearedSoulMd: number;
-          dryRun: boolean;
-          scanned: number;
-          unchanged: number;
-          updated: number;
-          updatedAgentKeys: Array<string>;
-        },
-        Name
-      >;
       completeJob: FunctionReference<
         "mutation",
         "internal",
@@ -1743,12 +1705,8 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             serviceId?: string;
             serviceKeySecretRef?: string;
           };
-          clientMd?: string;
           enabled: boolean;
-          providerUserId?: string;
           secretsRef: Array<string>;
-          skills?: Array<string>;
-          soulMd?: string;
           version: string;
         },
         string,

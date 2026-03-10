@@ -44,6 +44,20 @@ type ReconcileWorkerPoolArgs = {
   providerConfig?: typeof DEFAULT_CONFIG.provider;
 };
 
+type SchedulerWorkerRow = {
+  workerId: string;
+  status: "active" | "stopped";
+  load: number;
+  heartbeatAt: number;
+  lastClaimAt: number | null;
+  scheduledShutdownAt: number | null;
+  stoppedAt: number | null;
+  lastSnapshotId: string | null;
+  machineId: string | null;
+  appName: string | null;
+  region: string | null;
+};
+
 export const reconcileWorkerPool = action({
   args: reconcileWorkerPoolArgs,
   returns: reconcileWorkerPoolReturns,
@@ -126,6 +140,7 @@ async function runReconcileWorkerPool(
     lastClaimAt: number | null;
     scheduledShutdownAt: number | null;
     stoppedAt: number | null;
+    lastSnapshotId: string | null;
     machineId: string | null;
     appName: string | null;
     region: string | null;
@@ -172,11 +187,11 @@ async function runReconcileWorkerPool(
   }
   const workspaceId = args.workspaceId ?? "default";
   const provider = resolveProvider(providerConfig.kind, flyApiToken);
-
+  const isScopedWorker = (worker: SchedulerWorkerRow) =>
+    worker.appName === null || worker.appName === providerConfig.appName;
+  const scopedWorkerRows = () => workerRows.filter(isScopedWorker);
   const localWorkersWithMachine = workerRows.filter(
-    (worker) =>
-      worker.machineId &&
-      (worker.appName === null || worker.appName === providerConfig.appName),
+    (worker) => isScopedWorker(worker) && worker.machineId,
   );
   const liveMachineIds = new Set<string>();
   const liveMachineImages = new Set<string>();
@@ -205,18 +220,9 @@ async function runReconcileWorkerPool(
       (worker) => worker.machineId && !liveMachineIds.has(worker.machineId),
     );
     for (const worker of staleWorkers) {
-      await ctx.runMutation(internal.queue.upsertWorkerState, {
-        workerId: worker.workerId,
-        provider: providerConfig.kind,
-        status: "stopped",
-        load: 0,
-        nowMs,
-        scheduledShutdownAt: worker.scheduledShutdownAt ?? undefined,
-        stoppedAt: nowMs,
-        machineId: worker.machineId ?? undefined,
-        appName: providerConfig.appName,
-        region: providerConfig.region,
-      });
+      if (worker.status !== "stopped") {
+        await transitionWorkerToStopped(ctx, worker, providerConfig, nowMs, false);
+      }
     }
     if (staleWorkers.length > 0) {
       workerRows = await ctx.runQuery((internal.queue as any).listWorkersForScheduler, {});
@@ -224,7 +230,7 @@ async function runReconcileWorkerPool(
   }
 
   let spawned = 0;
-  let terminated = staleWorkers.length;
+  let terminated = staleWorkers.filter((worker) => worker.status !== "stopped").length;
 
   const dedicatedVolumeMode =
     providerConfig.volumeName.trim().length > 0 && providerConfig.volumePath.trim().length > 0;
@@ -237,7 +243,7 @@ async function runReconcileWorkerPool(
       `[scheduler] dedicated volume mode enabled for ${providerConfig.volumeName}; clamping desired workers to 1`,
     );
   }
-  const activeWorkers = workerRows.filter(
+  const activeWorkers = scopedWorkerRows().filter(
     (worker) => worker.status === "active" && worker.heartbeatAt > staleHeartbeatCutoff,
   ).length;
 
@@ -273,46 +279,49 @@ async function runReconcileWorkerPool(
         appName: providerConfig.appName,
         region: created.region,
       });
+      await scheduleIdleShutdownWatch(ctx, providerConfig, nowMs + scaling.idleTimeoutMs, nowMs);
       spawned += 1;
     }
   }
 
-  const dueIdleTimeout = workerRows
-    .filter(
-      (worker) =>
-        worker.status === "active" &&
-        worker.load === 0 &&
-        worker.scheduledShutdownAt !== null &&
-        worker.scheduledShutdownAt <= nowMs,
-    )
-    .sort((a, b) => (a.scheduledShutdownAt ?? 0) - (b.scheduledShutdownAt ?? 0));
+  const dueIdleTimeout = getDueIdleWorkers(scopedWorkerRows(), nowMs);
   for (const worker of dueIdleTimeout) {
-    const machineId = worker.machineId;
-    const machineIsLive = machineId ? liveMachineIds.has(machineId) : false;
-    const terminatedNow = await drainAndTerminateWorker({
-      provider,
-      appName: providerConfig.appName,
-      machineId,
-      machineIsLive,
-      workerId: worker.workerId,
-    });
-    if (!terminatedNow) {
-      // Keep worker active so the next reconcile can retry termination.
+    const machineIsLive = worker.machineId ? liveMachineIds.has(worker.machineId) : false;
+    await transitionWorkerToStopped(
+      ctx,
+      worker,
+      providerConfig,
+      nowMs,
+      machineIsLive && requiresFinalSnapshot(worker),
+    );
+    terminated += 1;
+  }
+  if (dueIdleTimeout.length > 0) {
+    workerRows = await ctx.runQuery((internal.queue as any).listWorkersForScheduler, {});
+  }
+
+  let pendingFinalization = 0;
+  const stoppedWorkersAwaitingTeardown = getStoppedWorkersAwaitingTeardown(
+    scopedWorkerRows(),
+    nowMs,
+  );
+  for (const worker of stoppedWorkersAwaitingTeardown) {
+    if (!hasFinalSnapshotReady(worker)) {
+      pendingFinalization += 1;
       continue;
     }
-    await ctx.runMutation(internal.queue.upsertWorkerState, {
-      workerId: worker.workerId,
-      provider: providerConfig.kind,
-      status: "stopped",
-      load: 0,
-      nowMs,
-      scheduledShutdownAt: worker.scheduledShutdownAt ?? undefined,
-      stoppedAt: nowMs,
-      machineId: machineId ?? undefined,
-      appName: providerConfig.appName,
-      region: providerConfig.region,
+    const finalized = await finalizeStoppedWorkerTeardown({
+      provider,
+      providerConfig,
+      worker,
+      liveMachineIds,
     });
-    terminated += 1;
+    if (!finalized) {
+      pendingFinalization += 1;
+    }
+  }
+  if (pendingFinalization > 0) {
+    await scheduleIdleShutdownRetry(ctx, providerConfig);
   }
 
   await ctx.runMutation((internal.queue as any).expireOldDataSnapshots, {
@@ -361,25 +370,21 @@ async function runEnforceIdleShutdowns(
     );
   }
   const provider = resolveProvider(providerConfig.kind, flyApiToken);
-  const workerRows: Array<{
-    workerId: string;
-    status: "active" | "stopped";
-    load: number;
-    scheduledShutdownAt: number | null;
-    machineId: string | null;
-  }> = await ctx.runQuery((internal.queue as any).listWorkersForScheduler, {});
+  let workerRows: Array<SchedulerWorkerRow> = await ctx.runQuery(
+    (internal.queue as any).listWorkersForScheduler,
+    {},
+  );
+  const scopedWorkers = () =>
+    workerRows.filter(
+      (worker) => worker.appName === null || worker.appName === providerConfig.appName,
+    );
+  const dueIdleTimeout = getDueIdleWorkers(scopedWorkers(), nowMs);
+  const stoppedWorkersAwaitingTeardown = getStoppedWorkersAwaitingTeardown(
+    scopedWorkers(),
+    nowMs,
+  );
 
-  const dueIdleTimeout = workerRows
-    .filter(
-      (worker) =>
-        worker.status === "active" &&
-        worker.load === 0 &&
-        worker.scheduledShutdownAt !== null &&
-        worker.scheduledShutdownAt <= nowMs,
-    )
-    .sort((a, b) => (a.scheduledShutdownAt ?? 0) - (b.scheduledShutdownAt ?? 0));
-
-  if (dueIdleTimeout.length === 0) {
+  if (dueIdleTimeout.length === 0 && stoppedWorkersAwaitingTeardown.length === 0) {
     return {
       checked: 0,
       stopped: 0,
@@ -391,49 +396,129 @@ async function runEnforceIdleShutdowns(
   const providerWorkers = await provider.listWorkers(providerConfig.appName);
   const liveMachineIds = new Set(providerWorkers.map((worker) => worker.machineId));
 
-  let stopped = 0;
-  let pending = 0;
   for (const worker of dueIdleTimeout) {
-    const machineId = worker.machineId;
-    const machineIsLive = machineId ? liveMachineIds.has(machineId) : false;
-    const terminatedNow = await drainAndTerminateWorker({
-      provider,
-      appName: providerConfig.appName,
-      machineId,
-      machineIsLive,
-      workerId: worker.workerId,
-    });
-    if (!terminatedNow) {
+    const machineIsLive = worker.machineId ? liveMachineIds.has(worker.machineId) : false;
+    await transitionWorkerToStopped(
+      ctx,
+      worker,
+      providerConfig,
+      nowMs,
+      machineIsLive && requiresFinalSnapshot(worker),
+    );
+  }
+  if (dueIdleTimeout.length > 0) {
+    workerRows = await ctx.runQuery((internal.queue as any).listWorkersForScheduler, {});
+  }
+
+  const stopped = dueIdleTimeout.length;
+  let pending = 0;
+  for (const worker of getStoppedWorkersAwaitingTeardown(scopedWorkers(), nowMs)) {
+    if (!hasFinalSnapshotReady(worker)) {
       pending += 1;
       continue;
     }
-    await ctx.runMutation(internal.queue.upsertWorkerState, {
-      workerId: worker.workerId,
-      provider: providerConfig.kind,
-      status: "stopped",
-      load: 0,
-      nowMs,
-      scheduledShutdownAt: worker.scheduledShutdownAt ?? undefined,
-      stoppedAt: nowMs,
-      machineId: machineId ?? undefined,
-      appName: providerConfig.appName,
-      region: providerConfig.region,
+    const finalized = await finalizeStoppedWorkerTeardown({
+      provider,
+      providerConfig,
+      worker,
+      liveMachineIds,
     });
-    stopped += 1;
+    if (!finalized) {
+      pending += 1;
+    }
   }
 
   if (pending > 0) {
-    await ctx.scheduler.runAfter(60_000, (internal.scheduler as any).enforceIdleShutdowns, {
-      providerConfig,
-    });
+    await scheduleIdleShutdownRetry(ctx, providerConfig);
   }
 
   return {
-    checked: dueIdleTimeout.length,
+    checked: dueIdleTimeout.length + stoppedWorkersAwaitingTeardown.length,
     stopped,
     pending,
     nextCheckScheduled: pending > 0,
   };
+}
+
+function getDueIdleWorkers(workerRows: Array<SchedulerWorkerRow>, nowMs: number) {
+  return workerRows
+    .filter(
+      (worker) =>
+        worker.status === "active" &&
+        worker.load === 0 &&
+        worker.scheduledShutdownAt !== null &&
+        worker.scheduledShutdownAt <= nowMs,
+    )
+    .sort((a, b) => (a.scheduledShutdownAt ?? 0) - (b.scheduledShutdownAt ?? 0));
+}
+
+function getStoppedWorkersAwaitingTeardown(workerRows: Array<SchedulerWorkerRow>, nowMs: number) {
+  return workerRows
+    .filter(
+      (worker) =>
+        worker.status === "stopped" &&
+        worker.scheduledShutdownAt !== null &&
+        worker.scheduledShutdownAt <= nowMs,
+    )
+    .sort((a, b) => (a.stoppedAt ?? a.scheduledShutdownAt ?? 0) - (b.stoppedAt ?? b.scheduledShutdownAt ?? 0));
+}
+
+function requiresFinalSnapshot(worker: SchedulerWorkerRow) {
+  return worker.lastClaimAt !== null;
+}
+
+function hasFinalSnapshotReady(worker: SchedulerWorkerRow) {
+  return !requiresFinalSnapshot(worker) || worker.lastSnapshotId !== null;
+}
+
+async function transitionWorkerToStopped(
+  ctx: any,
+  worker: SchedulerWorkerRow,
+  providerConfig: typeof DEFAULT_CONFIG.provider,
+  nowMs: number,
+  clearLastSnapshotId: boolean,
+) {
+  await ctx.runMutation(internal.queue.upsertWorkerState, {
+    workerId: worker.workerId,
+    provider: providerConfig.kind,
+    status: "stopped",
+    load: 0,
+    nowMs,
+    scheduledShutdownAt: worker.scheduledShutdownAt ?? undefined,
+    stoppedAt: worker.stoppedAt ?? nowMs,
+    machineId: worker.machineId ?? undefined,
+    appName: providerConfig.appName,
+    region: worker.region ?? providerConfig.region,
+    clearLastSnapshotId,
+  });
+}
+
+async function finalizeStoppedWorkerTeardown(input: {
+  provider: WorkerProvider;
+  providerConfig: typeof DEFAULT_CONFIG.provider;
+  worker: SchedulerWorkerRow;
+  liveMachineIds: Set<string>;
+}) {
+  const machineId = input.worker.machineId;
+  const machineIsLive = machineId ? input.liveMachineIds.has(machineId) : false;
+  const terminatedNow = await drainAndTerminateWorker({
+    provider: input.provider,
+    appName: input.providerConfig.appName,
+    machineId,
+    machineIsLive,
+    workerId: input.worker.workerId,
+  });
+  if (!terminatedNow) {
+    return false;
+  }
+  await input.provider.cleanupWorkerStorage({
+    appName: input.providerConfig.appName,
+    workerId: input.worker.workerId,
+    machineId,
+    region: input.worker.region ?? input.providerConfig.region,
+    volumeName: input.providerConfig.volumeName,
+  });
+  return true;
 }
 
 async function drainAndTerminateWorker(input: {
@@ -465,6 +550,36 @@ async function drainAndTerminateWorker(input: {
     }
     throw error;
   }
+}
+
+async function scheduleIdleShutdownWatch(
+  ctx: {
+    scheduler: {
+      runAfter: (delayMs: number, fn: unknown, args: { providerConfig: typeof DEFAULT_CONFIG.provider }) => Promise<unknown>;
+    };
+  },
+  providerConfig: typeof DEFAULT_CONFIG.provider,
+  scheduledShutdownAt: number,
+  nowMs: number,
+) {
+  const delayMs = Math.max(0, scheduledShutdownAt - nowMs) + 1_000;
+  await ctx.scheduler.runAfter(delayMs, (internal.scheduler as any).enforceIdleShutdowns, {
+    providerConfig,
+  });
+}
+
+async function scheduleIdleShutdownRetry(
+  ctx: {
+    scheduler: {
+      runAfter: (delayMs: number, fn: unknown, args: { providerConfig: typeof DEFAULT_CONFIG.provider }) => Promise<unknown>;
+    };
+  },
+  providerConfig: typeof DEFAULT_CONFIG.provider,
+  delayMs = 60_000,
+) {
+  await ctx.scheduler.runAfter(delayMs, (internal.scheduler as any).enforceIdleShutdowns, {
+    providerConfig,
+  });
 }
 
 function resolveProvider(kind: string, flyApiToken: string): WorkerProvider {

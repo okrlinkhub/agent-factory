@@ -33,6 +33,13 @@ export interface WorkerProvider {
   terminateWorker(appName: string, machineId: string): Promise<void>;
   cordonWorker(appName: string, machineId: string): Promise<void>;
   stopWorker(appName: string, machineId: string): Promise<void>;
+  cleanupWorkerStorage(input: {
+    appName: string;
+    workerId: string;
+    machineId?: string | null;
+    region?: string;
+    volumeName: string;
+  }): Promise<void>;
 }
 
 type FlyMachine = {
@@ -153,15 +160,53 @@ export class FlyMachinesProvider implements WorkerProvider {
   }
 
   async terminateWorker(appName: string, machineId: string): Promise<void> {
-    const volumeIds = await this.getMachineVolumeIds(appName, machineId);
-    await this.request<void>({
-      path: `/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(machineId)}`,
-      method: "DELETE",
+    try {
+      await this.request<void>({
+        path: `/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(machineId)}`,
+        method: "DELETE",
+      });
+    } catch (error) {
+      if (isFlyNotFoundError(error)) {
+        return;
+      }
+      throw error;
+    }
+  }
+
+  async cleanupWorkerStorage(input: {
+    appName: string;
+    workerId: string;
+    machineId?: string | null;
+    region?: string;
+    volumeName: string;
+  }): Promise<void> {
+    const volumeIds = new Set<string>();
+    if (input.machineId) {
+      const machineVolumeIds = await this.getMachineVolumeIds(input.appName, input.machineId);
+      for (const volumeId of machineVolumeIds) {
+        volumeIds.add(volumeId);
+      }
+    }
+
+    const expectedVolumeName = buildDedicatedVolumeName(input.volumeName, input.workerId);
+    const volumes = await this.request<Array<FlyVolume>>({
+      path: `/apps/${encodeURIComponent(input.appName)}/volumes`,
+      method: "GET",
     });
+    for (const volume of volumes) {
+      if (volume.name !== expectedVolumeName) {
+        continue;
+      }
+      if (input.region && volume.region && volume.region !== input.region) {
+        continue;
+      }
+      volumeIds.add(volume.id);
+    }
+
     for (const volumeId of volumeIds) {
       try {
         await this.request<void>({
-          path: `/apps/${encodeURIComponent(appName)}/volumes/${encodeURIComponent(volumeId)}`,
+          path: `/apps/${encodeURIComponent(input.appName)}/volumes/${encodeURIComponent(volumeId)}`,
           method: "DELETE",
         });
       } catch (error) {

@@ -412,9 +412,6 @@ export function exposeApi(
         return await ctx.runMutation(component.lib.configureAgent, {
           agentKey: "default",
           version: "1.0.0",
-          soulMd: "# Soul",
-          clientMd: "# Client",
-          skills: ["agent-bridge"],
           secretsRef: ["telegram.botToken"],
           enabled: true,
         });

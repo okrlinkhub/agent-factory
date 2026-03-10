@@ -42,9 +42,6 @@ export const upsertExampleAgentProfile = mutation({
     return await ctx.runMutation(components.agentFactory.lib.configureAgent, {
       agentKey: args.agentKey,
       version: "1.0.0",
-      soulMd: "# Soul",
-      clientMd: "# Client",
-      skills: ["agent-bridge"],
       secretsRef: [args.secretRef],
       enabled: true,
     });

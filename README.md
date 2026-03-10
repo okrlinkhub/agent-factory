@@ -168,7 +168,7 @@ Why:
 
 Practical notes:
 - set model/provider env on the Fly app (`fly secrets set` / `[env]` in `fly.toml`)
-- keep `agentProfiles` focused on identity, skills, docs, and secrets references
+- keep `agentProfiles` focused on identity, bridge configuration, and secrets references
 - worker image tag stays centralized in `src/component/config.ts` (`DEFAULT_WORKER_IMAGE`)
 
 If you use `exposeApi(...)`, the worker contract is available directly on the consumer API surface:
@@ -188,9 +188,6 @@ If you use `exposeApi(...)`, the worker contract is available directly on the co
 await ctx.runMutation(components.agentFactory.lib.configureAgent, {
   agentKey: "default",
   version: "1.0.0",
-  soulMd: "# Soul",
-  clientMd: "# Client",
-  skills: ["agent-bridge"],
   secretsRef: [],
   bridgeConfig: {
     enabled: true,

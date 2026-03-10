@@ -120,20 +120,15 @@ export const enqueueMessage = mutation({
     if (!profile || !profile.enabled) {
       throw new Error(`Agent profile '${args.agentKey}' not found or disabled`);
     }
-    const resolvedProviderUserId =
-      profile.providerUserId && profile.providerUserId.trim().length > 0
-        ? profile.providerUserId.trim()
-        : args.payload.providerUserId;
-
     const providerUserIdStr =
-      typeof resolvedProviderUserId === "string" &&
-      resolvedProviderUserId.trim().length > 0
-        ? resolvedProviderUserId.trim()
+      typeof args.payload.providerUserId === "string" &&
+      args.payload.providerUserId.trim().length > 0
+        ? args.payload.providerUserId.trim()
         : null;
 
     if (providerUserIdStr === null) {
       throw new Error(
-        `providerUserId is required but missing: profile.providerUserId=${JSON.stringify(profile.providerUserId)}, payload.providerUserId=${JSON.stringify(args.payload.providerUserId)}`,
+        `providerUserId is required but missing in payload.providerUserId=${JSON.stringify(args.payload.providerUserId)}`,
       );
     }
 
@@ -267,11 +262,7 @@ export const appendConversationMessages = mutation({
 export const upsertAgentProfile = mutation({
   args: {
     agentKey: v.string(),
-    providerUserId: v.optional(v.string()),
     version: v.string(),
-    soulMd: v.optional(v.string()),
-    clientMd: v.optional(v.string()),
-    skills: v.optional(v.array(v.string())),
     secretsRef: v.array(v.string()),
     bridgeConfig: v.optional(bridgeProfileConfigValidator),
     enabled: v.boolean(),
@@ -292,85 +283,6 @@ export const upsertAgentProfile = mutation({
     }
     await ctx.db.patch(existing._id, { ...args, secretsRef });
     return existing._id;
-  },
-});
-
-export const clearDeprecatedAgentProfileFields = mutation({
-  args: {
-    dryRun: v.optional(v.boolean()),
-  },
-  returns: v.object({
-    dryRun: v.boolean(),
-    scanned: v.number(),
-    updated: v.number(),
-    unchanged: v.number(),
-    clearedProviderUserId: v.number(),
-    clearedSoulMd: v.number(),
-    clearedClientMd: v.number(),
-    clearedSkills: v.number(),
-    updatedAgentKeys: v.array(v.string()),
-  }),
-  handler: async (ctx, args) => {
-    const profiles = await ctx.db.query("agentProfiles").collect();
-    const dryRun = args.dryRun ?? false;
-
-    let updated = 0;
-    let clearedProviderUserId = 0;
-    let clearedSoulMd = 0;
-    let clearedClientMd = 0;
-    let clearedSkills = 0;
-    const updatedAgentKeys: Array<string> = [];
-
-    for (const profile of profiles) {
-      const patch: {
-        providerUserId?: undefined;
-        soulMd?: undefined;
-        clientMd?: undefined;
-        skills?: undefined;
-      } = {};
-      let shouldPatch = false;
-
-      if (profile.providerUserId !== undefined) {
-        patch.providerUserId = undefined;
-        clearedProviderUserId += 1;
-        shouldPatch = true;
-      }
-      if (profile.soulMd !== undefined) {
-        patch.soulMd = undefined;
-        clearedSoulMd += 1;
-        shouldPatch = true;
-      }
-      if (profile.clientMd !== undefined) {
-        patch.clientMd = undefined;
-        clearedClientMd += 1;
-        shouldPatch = true;
-      }
-      if (profile.skills !== undefined) {
-        patch.skills = undefined;
-        clearedSkills += 1;
-        shouldPatch = true;
-      }
-
-      if (!shouldPatch) continue;
-
-      updated += 1;
-      updatedAgentKeys.push(profile.agentKey);
-      if (!dryRun) {
-        await ctx.db.patch(profile._id, patch);
-      }
-    }
-
-    return {
-      dryRun,
-      scanned: profiles.length,
-      updated,
-      unchanged: profiles.length - updated,
-      clearedProviderUserId,
-      clearedSoulMd,
-      clearedClientMd,
-      clearedSkills,
-      updatedAgentKeys,
-    };
   },
 });
 
@@ -1110,6 +1022,13 @@ export const claimNextJob = mutation({
   returns: v.union(v.null(), claimedJobValidator),
   handler: async (ctx, args) => {
     const nowMs = args.nowMs ?? Date.now();
+    const worker = await ctx.db
+      .query("workers")
+      .withIndex("by_workerId", (q) => q.eq("workerId", args.workerId))
+      .unique();
+    if (worker?.status === "stopped") {
+      return null;
+    }
     const candidates = await ctx.db
       .query("messageQueue")
       .withIndex("by_status_and_scheduledFor", (q) =>
@@ -1155,11 +1074,6 @@ export const claimNextJob = mutation({
         },
       });
 
-      const worker = await ctx.db
-        .query("workers")
-        .withIndex("by_workerId", (q) => q.eq("workerId", args.workerId))
-        .unique();
-
       if (!worker) {
         await ctx.db.insert("workers", {
           workerId: args.workerId,
@@ -1179,7 +1093,6 @@ export const claimNextJob = mutation({
           heartbeatAt: nowMs,
           lastClaimAt: nowMs,
           scheduledShutdownAt: undefined,
-          stoppedAt: undefined,
         });
       }
 
@@ -1310,25 +1223,9 @@ export const completeJob = mutation({
         load: nextLoad,
         heartbeatAt: nowMs,
         scheduledShutdownAt: nextScheduledShutdownAt,
-        stoppedAt: undefined,
       });
       if (nextScheduledShutdownAt !== undefined) {
-        const delayMs = Math.max(0, nextScheduledShutdownAt - nowMs) + 1_000;
-        try {
-          await ctx.scheduler.runAfter(
-            delayMs,
-            (internal.scheduler as any).enforceIdleShutdowns,
-            {
-              providerConfig: args.providerConfig,
-            },
-          );
-        } catch (error) {
-          console.warn(
-            `[queue] failed to schedule idle-shutdown watchdog: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
-        }
+        await scheduleIdleShutdownWatchdog(ctx, nextScheduledShutdownAt, nowMs, args.providerConfig);
       }
     }
     return true;
@@ -1418,25 +1315,9 @@ export const failJob = mutation({
         load: nextLoad,
         heartbeatAt: nowMs,
         scheduledShutdownAt: nextScheduledShutdownAt,
-        stoppedAt: undefined,
       });
       if (nextScheduledShutdownAt !== undefined) {
-        const delayMs = Math.max(0, nextScheduledShutdownAt - nowMs) + 1_000;
-        try {
-          await ctx.scheduler.runAfter(
-            delayMs,
-            (internal.scheduler as any).enforceIdleShutdowns,
-            {
-              providerConfig: args.providerConfig,
-            },
-          );
-        } catch (error) {
-          console.warn(
-            `[queue] failed to schedule idle-shutdown watchdog: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
-        }
+        await scheduleIdleShutdownWatchdog(ctx, nextScheduledShutdownAt, nowMs, args.providerConfig);
       }
     }
 
@@ -1509,8 +1390,10 @@ export const releaseExpiredLeases = internalMutation({
             load: nextLoad,
             heartbeatAt: nowMs,
             scheduledShutdownAt: nextScheduledShutdownAt,
-            stoppedAt: undefined,
           });
+          if (nextScheduledShutdownAt !== undefined) {
+            await scheduleIdleShutdownWatchdog(ctx, nextScheduledShutdownAt, nowMs);
+          }
         }
       }
     }
@@ -1580,8 +1463,10 @@ export const releaseStuckJobs = mutation({
             load: nextLoad,
             heartbeatAt: nowMs,
             scheduledShutdownAt: nextScheduledShutdownAt,
-            stoppedAt: undefined,
           });
+          if (nextScheduledShutdownAt !== undefined) {
+            await scheduleIdleShutdownWatchdog(ctx, nextScheduledShutdownAt, nowMs);
+          }
         }
       }
     }
@@ -1862,6 +1747,7 @@ export const upsertWorkerState = internalMutation({
     machineId: v.optional(v.string()),
     appName: v.optional(v.string()),
     region: v.optional(v.string()),
+    clearLastSnapshotId: v.optional(v.boolean()),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -1892,6 +1778,10 @@ export const upsertWorkerState = internalMutation({
       return null;
     }
 
+    if (worker.status === "stopped" && args.status === "active") {
+      throw new Error(`Worker '${args.workerId}' is stopped and cannot be reactivated.`);
+    }
+
     await ctx.db.patch(worker._id, {
       status: args.status,
       load: args.load,
@@ -1901,6 +1791,7 @@ export const upsertWorkerState = internalMutation({
         args.status === "active"
           ? undefined
           : (args.stoppedAt ?? worker.stoppedAt ?? nowMs),
+      lastSnapshotId: args.clearLastSnapshotId ? undefined : worker.lastSnapshotId,
       machineRef:
         args.machineId && args.appName
           ? {
@@ -1926,8 +1817,12 @@ export const getWorkerControlState = query({
       .query("workers")
       .withIndex("by_workerId", (q) => q.eq("workerId", args.workerId))
       .unique();
+    const nowMs = Date.now();
     return {
-      shouldStop: !worker || worker.status === "stopped",
+      shouldStop:
+        !worker ||
+        worker.status === "stopped" ||
+        (worker.scheduledShutdownAt !== undefined && worker.scheduledShutdownAt <= nowMs),
     };
   },
 });
@@ -2083,6 +1978,7 @@ export const listWorkersForScheduler = internalQuery({
       lastClaimAt: v.union(v.null(), v.number()),
       scheduledShutdownAt: v.union(v.null(), v.number()),
       stoppedAt: v.union(v.null(), v.number()),
+      lastSnapshotId: v.union(v.null(), v.id("dataSnapshots")),
       machineId: v.union(v.null(), v.string()),
       appName: v.union(v.null(), v.string()),
       region: v.union(v.null(), v.string()),
@@ -2098,6 +1994,7 @@ export const listWorkersForScheduler = internalQuery({
       lastClaimAt: worker.lastClaimAt ?? null,
       scheduledShutdownAt: worker.scheduledShutdownAt ?? null,
       stoppedAt: worker.stoppedAt ?? null,
+      lastSnapshotId: worker.lastSnapshotId ?? null,
       machineId: worker.machineRef?.machineId ?? null,
       appName: worker.machineRef?.appName ?? null,
       region: worker.machineRef?.region ?? null,
@@ -2247,6 +2144,26 @@ function appendSystemPromptToMessage(messageText: string, systemPrompt?: string)
     return normalizedSystemPrompt;
   }
   return `${normalizedMessageText}\n\n${normalizedSystemPrompt}`;
+}
+
+async function scheduleIdleShutdownWatchdog(
+  ctx: any,
+  scheduledShutdownAt: number,
+  nowMs: number,
+  providerConfig?: typeof DEFAULT_CONFIG.provider,
+) {
+  const delayMs = Math.max(0, scheduledShutdownAt - nowMs) + 1_000;
+  try {
+    await ctx.scheduler.runAfter(delayMs, (internal.scheduler as any).enforceIdleShutdowns, {
+      providerConfig,
+    });
+  } catch (error) {
+    console.warn(
+      `[queue] failed to schedule idle-shutdown watchdog: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
 }
 
 function normalizeMessageRuntimeConfig(
