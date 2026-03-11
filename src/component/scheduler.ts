@@ -64,6 +64,12 @@ type SchedulerWorkerRow = {
   scheduledShutdownAt: number | null;
   stoppedAt: number | null;
   lastSnapshotId: string | null;
+  assignment: {
+    conversationId: string;
+    agentKey: string;
+    leaseId: string;
+    assignedAt: number;
+  } | null;
   machineId: string | null;
   appName: string | null;
   region: string | null;
@@ -174,10 +180,11 @@ async function runReconcileWorkerPool(
   }
   const workspaceId = args.workspaceId ?? "default";
   const provider = resolveProvider(providerConfig.kind, flyApiToken);
-  const activeConversationCount: number = await ctx.runQuery(
-    (internal.queue as any).getActiveConversationCountForScheduler,
+  const activeConversationIds: Array<string> = await ctx.runQuery(
+    (internal.queue as any).getActiveConversationIdsForScheduler,
     { nowMs, limit: 1000 },
   );
+  const activeConversationCount = activeConversationIds.length;
   const cycle = await runWorkerLifecycleCycle(ctx, {
     nowMs,
     provider,
@@ -186,6 +193,7 @@ async function runReconcileWorkerPool(
     allowSpawn: true,
     convexUrl,
     workspaceId,
+    activeConversationIds,
     desiredActiveWorkers: clamp(activeConversationCount, 0, scaling.maxWorkers),
   });
   if (activeConversationCount > 0 || cycle.pending > 0) {
@@ -244,6 +252,7 @@ async function runEnforceIdleShutdowns(
     scaling: DEFAULT_CONFIG.scaling,
     allowSpawn: false,
     desiredActiveWorkers: 0,
+    activeConversationIds: [],
   });
 
   if (cycle.pending > 0) {
@@ -267,6 +276,7 @@ async function runWorkerLifecycleCycle(
     scaling: typeof DEFAULT_CONFIG.scaling;
     allowSpawn: boolean;
     desiredActiveWorkers: number;
+    activeConversationIds: Array<string>;
     convexUrl?: string;
     workspaceId?: string;
   },
@@ -320,9 +330,11 @@ async function runWorkerLifecycleCycle(
 
   let spawned = 0;
   if (input.allowSpawn && input.desiredActiveWorkers > 0) {
-    const claimableWorkers = filterScopedWorkers(workerRows, input.providerConfig.appName).filter(
-      (worker) => isWorkerClaimable(worker.status) && worker.heartbeatAt > staleHeartbeatCutoff,
-    ).length;
+    const claimableWorkers = countWorkersAvailableForActiveConversations(
+      filterScopedWorkers(workerRows, input.providerConfig.appName),
+      input.activeConversationIds,
+      staleHeartbeatCutoff,
+    );
     if (input.desiredActiveWorkers > claimableWorkers) {
       const toSpawn = Math.min(
         input.scaling.spawnStep,
@@ -745,6 +757,28 @@ function clamp(value: number, min: number, max: number): number {
 
 function filterScopedWorkers(workerRows: Array<SchedulerWorkerRow>, appName: string) {
   return workerRows.filter((worker) => worker.appName === null || worker.appName === appName);
+}
+
+function countWorkersAvailableForActiveConversations(
+  workerRows: Array<SchedulerWorkerRow>,
+  activeConversationIds: Array<string>,
+  staleHeartbeatCutoff: number,
+) {
+  const activeConversationSet = new Set(activeConversationIds);
+  let available = 0;
+  for (const worker of workerRows) {
+    if (!isWorkerClaimable(worker.status) || worker.heartbeatAt <= staleHeartbeatCutoff) {
+      continue;
+    }
+    if (!worker.assignment) {
+      available += 1;
+      continue;
+    }
+    if (activeConversationSet.has(worker.assignment.conversationId)) {
+      available += 1;
+    }
+  }
+  return available;
 }
 
 function deriveScheduledShutdownAt(

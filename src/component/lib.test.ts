@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api.js";
+import { DEFAULT_CONFIG } from "./config.js";
 import { initConvexTest } from "./setup.test.js";
 import { canTransitionWorkerStatus } from "./workerLifecycle.js";
 
@@ -1088,6 +1089,258 @@ describe("component lib", () => {
 
     expect(reconcile.spawned).toBe(1);
     expect(reconcile.activeWorkers).toBe(2);
+  });
+
+  test("worker assignment should prevent cross-conversation claims after completion", async () => {
+    const t = initConvexTest();
+    const nowMs = Date.UTC(2026, 0, 1, 17, 30, 0);
+    vi.setSystemTime(nowMs);
+    await t.mutation(api.queue.upsertAgentProfile, {
+      agentKey: "support-agent",
+      version: "1.0.0",
+      secretsRef: [],
+      enabled: true,
+    });
+
+    const conversationA = "telegram:chat:sticky-a";
+    const conversationB = "telegram:chat:sticky-b";
+    const messageA = await t.mutation(api.queue.enqueueMessage, {
+      conversationId: conversationA,
+      agentKey: "support-agent",
+      payload: {
+        provider: "telegram",
+        providerUserId: "u-sticky-a",
+        messageText: "first",
+      },
+      nowMs,
+    });
+
+    const firstClaim = await t.mutation(api.lib.claim, {
+      workerId: "worker-sticky-1",
+      conversationId: conversationA,
+      nowMs,
+    });
+    expect(firstClaim?.messageId).toBe(messageA);
+
+    const completed = await t.mutation(api.lib.complete, {
+      workerId: "worker-sticky-1",
+      messageId: messageA,
+      leaseId: firstClaim?.leaseId ?? "",
+      nowMs: nowMs + 1_000,
+    });
+    expect(completed).toBe(true);
+
+    await t.mutation(api.queue.enqueueMessage, {
+      conversationId: conversationB,
+      agentKey: "support-agent",
+      payload: {
+        provider: "telegram",
+        providerUserId: "u-sticky-b",
+        messageText: "second",
+      },
+      nowMs: nowMs + 2_000,
+    });
+
+    const mismatchedClaim = await t.mutation(api.lib.claim, {
+      workerId: "worker-sticky-1",
+      nowMs: nowMs + 2_000,
+    });
+    expect(mismatchedClaim).toBeNull();
+
+    const queuedJobs = await t.query(api.queue.listJobsByStatus, {
+      status: "queued",
+      limit: 10,
+    });
+    expect(queuedJobs.some((job) => job.conversationId === conversationB)).toBe(true);
+
+    const workers = await t.query((internal.queue as any).listWorkersForScheduler, {});
+    const worker = workers.find((row: { workerId: string }) => row.workerId === "worker-sticky-1");
+    expect(worker?.assignment).toEqual({
+      conversationId: conversationA,
+      agentKey: "support-agent",
+      leaseId: firstClaim?.leaseId ?? "",
+      assignedAt: nowMs,
+    });
+  });
+
+  test("scheduler should spawn when only an idle worker pinned to another conversation exists", async () => {
+    const t = initConvexTest();
+    const nowMs = Date.UTC(2026, 0, 1, 17, 45, 0);
+    vi.setSystemTime(nowMs);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/machines`) && method === "GET") {
+        return jsonResponse([]);
+      }
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/volumes`) && method === "GET") {
+        return jsonResponse([]);
+      }
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/volumes`) && method === "POST") {
+        return jsonResponse({
+          id: "vol-pinned-new-worker",
+          name: buildDedicatedVolumeName(TEST_PROVIDER_CONFIG.volumeName, "afw-177"),
+          region: TEST_PROVIDER_CONFIG.region,
+        });
+      }
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/machines`) && method === "POST") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { name?: string };
+        return jsonResponse({
+          id: "machine-pinned-new-worker",
+          name: body.name,
+          region: TEST_PROVIDER_CONFIG.region,
+          state: "started",
+          config: { image: TEST_PROVIDER_CONFIG.image },
+        });
+      }
+      throw new Error(`Unexpected fetch ${method} ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await t.mutation(api.queue.upsertAgentProfile, {
+      agentKey: "support-agent",
+      version: "1.0.0",
+      secretsRef: [],
+      enabled: true,
+    });
+    await t.mutation(api.queue.importPlaintextSecret, {
+      secretRef: "fly.apiToken",
+      plaintextValue: "fly-token",
+    });
+    await t.mutation(api.queue.importPlaintextSecret, {
+      secretRef: "convex.url",
+      plaintextValue: "https://example.convex.cloud",
+    });
+
+    const messageA = await t.mutation(api.queue.enqueueMessage, {
+      conversationId: "telegram:chat:pinned-a",
+      agentKey: "support-agent",
+      payload: {
+        provider: "telegram",
+        providerUserId: "u-pinned-a",
+        messageText: "first",
+      },
+      nowMs,
+    });
+    const claimA = await t.mutation(api.lib.claim, {
+      workerId: "worker-pinned-1",
+      conversationId: "telegram:chat:pinned-a",
+      nowMs,
+    });
+    expect(claimA?.messageId).toBe(messageA);
+
+    await t.mutation(api.lib.complete, {
+      workerId: "worker-pinned-1",
+      messageId: messageA,
+      leaseId: claimA?.leaseId ?? "",
+      nowMs: nowMs + 1_000,
+    });
+
+    await t.mutation(api.queue.enqueueMessage, {
+      conversationId: "telegram:chat:pinned-b",
+      agentKey: "support-agent",
+      payload: {
+        provider: "telegram",
+        providerUserId: "u-pinned-b",
+        messageText: "second",
+      },
+      nowMs: nowMs + 2_000,
+    });
+
+    const reconcile = await t.action(api.scheduler.reconcileWorkerPool, {
+      nowMs: nowMs + 2_000,
+      flyApiToken: "fly-token",
+      convexUrl: "https://example.convex.cloud",
+      scalingPolicy: {
+        maxWorkers: 5,
+        queuePerWorkerTarget: 1,
+        spawnStep: 1,
+        idleTimeoutMs: 300_000,
+        reconcileIntervalMs: 15_000,
+      },
+      providerConfig: TEST_PROVIDER_CONFIG,
+    });
+
+    expect(reconcile.spawned).toBe(1);
+    expect(reconcile.activeWorkers).toBe(2);
+  });
+
+  test("snapshot restore should require a matching conversation when conversationId is provided", async () => {
+    const t = initConvexTest();
+    const nowMs = Date.UTC(2026, 0, 1, 17, 50, 0);
+    const snapshot = await t.mutation(api.queue.prepareDataSnapshotUpload as any, {
+      workerId: "worker-snapshot-1",
+      workspaceId: "default",
+      agentKey: "support-agent",
+      conversationId: "telegram:chat:snapshot-a",
+      reason: "manual",
+      nowMs,
+    });
+    const storageId = await t.run(async (ctx) => {
+      return await ctx.storage.store(new Blob(["snapshot-a"]));
+    });
+    const finalized = await t.mutation(api.queue.finalizeDataSnapshotUpload as any, {
+      workerId: "worker-snapshot-1",
+      snapshotId: snapshot.snapshotId,
+      storageId,
+      sha256: "beadfeed",
+      sizeBytes: 10,
+      nowMs: nowMs + 1,
+    });
+    expect(finalized).toBe(true);
+
+    const missingConversationSnapshot = await t.query(
+      api.queue.getLatestDataSnapshotForRestore as any,
+      {
+        workspaceId: "default",
+        agentKey: "support-agent",
+        conversationId: "telegram:chat:snapshot-b",
+        nowMs: nowMs + 2,
+      },
+    );
+    expect(missingConversationSnapshot).toBeNull();
+  });
+
+  test("release stuck jobs should clear worker assignment when the lease is recovered", async () => {
+    const t = initConvexTest();
+    const nowMs = Date.UTC(2026, 0, 1, 17, 55, 0);
+    vi.setSystemTime(nowMs);
+    await t.mutation(api.queue.upsertAgentProfile, {
+      agentKey: "support-agent",
+      version: "1.0.0",
+      secretsRef: [],
+      enabled: true,
+    });
+
+    const messageId = await t.mutation(api.queue.enqueueMessage, {
+      conversationId: "telegram:chat:lease-clear",
+      agentKey: "support-agent",
+      payload: {
+        provider: "telegram",
+        providerUserId: "u-lease-clear",
+        messageText: "recover me",
+      },
+      nowMs,
+    });
+    const claim = await t.mutation(api.lib.claim, {
+      workerId: "worker-lease-clear-1",
+      conversationId: "telegram:chat:lease-clear",
+      nowMs,
+    });
+    expect(claim?.messageId).toBe(messageId);
+
+    const released = await t.mutation(api.queue.releaseStuckJobs, {
+      nowMs: nowMs + DEFAULT_CONFIG.lease.leaseMs + 1,
+      limit: 10,
+    });
+    expect(released.requeued).toBe(1);
+    expect(released.unlocked).toBe(1);
+
+    const workers = await t.query((internal.queue as any).listWorkersForScheduler, {});
+    const worker = workers.find(
+      (row: { workerId: string }) => row.workerId === "worker-lease-clear-1",
+    );
+    expect(worker?.assignment).toBeNull();
   });
 
   test("checkIdleShutdowns should backfill missing scheduledShutdownAt for idle active workers", async () => {

@@ -48,6 +48,13 @@ const claimedJobValidator = v.object({
   payload: queuePayloadValidator,
 });
 
+const workerAssignmentValidator = v.object({
+  conversationId: v.string(),
+  agentKey: v.string(),
+  leaseId: v.string(),
+  assignedAt: v.number(),
+});
+
 const secretStatusValidator = v.object({
   secretRef: v.string(),
   hasActive: v.boolean(),
@@ -166,6 +173,10 @@ export const enqueueMessage = mutation({
         contextHistory: [],
         pendingToolCalls: [],
       });
+    } else if (existingConversation.agentKey !== args.agentKey) {
+      throw new Error(
+        `Conversation '${args.conversationId}' is already bound to agent '${existingConversation.agentKey}', cannot enqueue for '${args.agentKey}'.`,
+      );
     }
 
     const priority = Math.min(
@@ -1024,6 +1035,7 @@ export const attachMessageMetadata = mutation({
 export const claimNextJob = mutation({
   args: {
     workerId: v.string(),
+    conversationId: v.optional(v.string()),
     nowMs: v.optional(v.number()),
   },
   returns: v.union(v.null(), claimedJobValidator),
@@ -1034,6 +1046,13 @@ export const claimNextJob = mutation({
       .withIndex("by_workerId", (q) => q.eq("workerId", args.workerId))
       .unique();
     if (worker && !isWorkerClaimable(worker.status)) {
+      return null;
+    }
+    if (
+      worker?.assignment &&
+      args.conversationId &&
+      worker.assignment.conversationId !== args.conversationId
+    ) {
       return null;
     }
     const candidates = await ctx.db
@@ -1050,6 +1069,16 @@ export const claimNextJob = mutation({
     });
 
     for (const candidate of candidates) {
+      if (args.conversationId && candidate.conversationId !== args.conversationId) {
+        continue;
+      }
+      if (
+        worker?.assignment &&
+        candidate.conversationId !== worker.assignment.conversationId
+      ) {
+        continue;
+      }
+
       const conversation = await ctx.db
         .query("conversations")
         .withIndex("by_conversationId", (q) =>
@@ -1057,12 +1086,25 @@ export const claimNextJob = mutation({
         )
         .unique();
       if (!conversation) continue;
+      if (conversation.agentKey !== candidate.agentKey) continue;
+      if (
+        worker?.assignment &&
+        conversation.agentKey !== worker.assignment.agentKey
+      ) {
+        continue;
+      }
 
       const lock = conversation.processingLock;
       if (lock && lock.leaseExpiresAt > nowMs) continue;
 
       const leaseId = `${nowMs}-${Math.random().toString(36).slice(2, 10)}`;
       const leaseExpiresAt = nowMs + DEFAULT_CONFIG.lease.leaseMs;
+      const nextAssignment = {
+        conversationId: candidate.conversationId,
+        agentKey: candidate.agentKey,
+        leaseId,
+        assignedAt: worker?.assignment?.assignedAt ?? nowMs,
+      };
 
       await ctx.db.patch(candidate._id, {
         status: "processing",
@@ -1091,6 +1133,7 @@ export const claimNextJob = mutation({
           lastClaimAt: nowMs,
           scheduledShutdownAt: undefined,
           stoppedAt: undefined,
+          assignment: nextAssignment,
           capabilities: [],
         });
       } else {
@@ -1101,6 +1144,7 @@ export const claimNextJob = mutation({
           lastClaimAt: nowMs,
           scheduledShutdownAt: undefined,
           stoppedAt: undefined,
+          assignment: nextAssignment,
         });
       }
 
@@ -1168,7 +1212,29 @@ export const heartbeatJob = mutation({
       .withIndex("by_workerId", (q) => q.eq("workerId", args.workerId))
       .unique();
     if (worker && isWorkerRunning(worker.status)) {
-      await ctx.db.patch(worker._id, { heartbeatAt: nowMs });
+      const nextPatch: {
+        heartbeatAt: number;
+        assignment?: {
+          conversationId: string;
+          agentKey: string;
+          leaseId: string;
+          assignedAt: number;
+        };
+      } = { heartbeatAt: nowMs };
+      if (
+        !worker.assignment ||
+        worker.assignment.conversationId !== message.conversationId ||
+        worker.assignment.agentKey !== message.agentKey ||
+        worker.assignment.leaseId !== args.leaseId
+      ) {
+        nextPatch.assignment = {
+          conversationId: message.conversationId,
+          agentKey: message.agentKey,
+          leaseId: args.leaseId,
+          assignedAt: worker.assignment?.assignedAt ?? nowMs,
+        };
+      }
+      await ctx.db.patch(worker._id, nextPatch);
     }
 
     return true;
@@ -1229,6 +1295,7 @@ export const completeJob = mutation({
         load: nextLoad,
         heartbeatAt: nowMs,
         scheduledShutdownAt: nextScheduledShutdownAt,
+        assignment: getAssignmentForCompletedConversation(worker, message),
       });
       if (nextScheduledShutdownAt !== undefined) {
         await scheduleIdleShutdownWatchdog(ctx, nextScheduledShutdownAt, nowMs, args.providerConfig);
@@ -1317,6 +1384,7 @@ export const failJob = mutation({
         load: nextLoad,
         heartbeatAt: nowMs,
         scheduledShutdownAt: nextScheduledShutdownAt,
+        assignment: getAssignmentForCompletedConversation(worker, message),
       });
       if (nextScheduledShutdownAt !== undefined) {
         await scheduleIdleShutdownWatchdog(ctx, nextScheduledShutdownAt, nowMs, args.providerConfig);
@@ -1402,6 +1470,7 @@ export const releaseExpiredLeases = internalMutation({
             load: nextLoad,
             heartbeatAt: nowMs,
             scheduledShutdownAt: nextScheduledShutdownAt,
+            assignment: clearAssignmentForMessage(worker, message, nextLoad),
           });
           if (nextScheduledShutdownAt !== undefined) {
             await scheduleIdleShutdownWatchdog(ctx, nextScheduledShutdownAt, nowMs);
@@ -1485,6 +1554,7 @@ export const releaseStuckJobs = mutation({
             load: nextLoad,
             heartbeatAt: nowMs,
             scheduledShutdownAt: nextScheduledShutdownAt,
+            assignment: clearAssignmentForMessage(worker, message, nextLoad),
           });
           if (nextScheduledShutdownAt !== undefined) {
             await scheduleIdleShutdownWatchdog(ctx, nextScheduledShutdownAt, nowMs);
@@ -1714,6 +1784,33 @@ export const getActiveConversationCountForScheduler = internalQuery({
   },
 });
 
+export const getActiveConversationIdsForScheduler = internalQuery({
+  args: {
+    nowMs: v.optional(v.number()),
+    limit: v.optional(v.number()),
+  },
+  returns: v.array(v.string()),
+  handler: async (ctx, args) => {
+    const nowMs = args.nowMs ?? Date.now();
+    const limit = Math.max(1, args.limit ?? 1000);
+    const queuedJobs = await ctx.db
+      .query("messageQueue")
+      .withIndex("by_status_and_scheduledFor", (q) =>
+        q.eq("status", "queued").lte("scheduledFor", nowMs),
+      )
+      .take(limit);
+    const processingJobs = await ctx.db
+      .query("messageQueue")
+      .withIndex("by_status_and_leaseExpiresAt", (q) =>
+        q.eq("status", "processing").gt("leaseExpiresAt", nowMs),
+      )
+      .take(limit);
+    return Array.from(
+      new Set([...queuedJobs, ...processingJobs].map((job) => job.conversationId)),
+    ).sort();
+  },
+});
+
 export const listJobsByStatus = query({
   args: {
     status: queueStatusValidator,
@@ -1788,6 +1885,7 @@ export const upsertWorkerState = internalMutation({
           args.status === "stopped" || args.status === "stopping"
             ? (args.stoppedAt ?? nowMs)
             : undefined,
+        assignment: undefined,
         machineRef:
           args.machineId && args.appName
             ? {
@@ -1817,6 +1915,7 @@ export const upsertWorkerState = internalMutation({
           ? (args.stoppedAt ?? worker.stoppedAt ?? nowMs)
           : undefined,
       lastSnapshotId: args.clearLastSnapshotId ? undefined : worker.lastSnapshotId,
+      assignment: worker.assignment,
       machineRef:
         args.clearMachineRef
           ? undefined
@@ -1979,10 +2078,9 @@ export const getLatestDataSnapshotForRestore = query({
         snapshot.archiveFileId !== undefined &&
         snapshot.expiresAt > nowMs,
     );
-    const preferred =
-      (args.conversationId
-        ? ready.find((snapshot) => snapshot.conversationId === args.conversationId)
-        : undefined) ?? ready[0];
+    const preferred = args.conversationId
+      ? ready.find((snapshot) => snapshot.conversationId === args.conversationId)
+      : ready[0];
     if (!preferred || !preferred.archiveFileId) return null;
     const downloadUrl = await ctx.storage.getUrl(preferred.archiveFileId);
     if (!downloadUrl) return null;
@@ -2008,6 +2106,7 @@ export const listWorkersForScheduler = internalQuery({
       scheduledShutdownAt: v.union(v.null(), v.number()),
       stoppedAt: v.union(v.null(), v.number()),
       lastSnapshotId: v.union(v.null(), v.id("dataSnapshots")),
+      assignment: v.union(v.null(), workerAssignmentValidator),
       machineId: v.union(v.null(), v.string()),
       appName: v.union(v.null(), v.string()),
       region: v.union(v.null(), v.string()),
@@ -2024,6 +2123,7 @@ export const listWorkersForScheduler = internalQuery({
       scheduledShutdownAt: worker.scheduledShutdownAt ?? null,
       stoppedAt: worker.stoppedAt ?? null,
       lastSnapshotId: worker.lastSnapshotId ?? null,
+      assignment: worker.assignment ?? null,
       machineId: worker.machineRef?.machineId ?? null,
       appName: worker.machineRef?.appName ?? null,
       region: worker.machineRef?.region ?? null,
@@ -2192,7 +2292,7 @@ async function scheduleIdleShutdownWatchdog(
   }
 }
 
-async function scheduleLeaseRecoveryWatchdog(ctx: any, nowMs: number) {
+async function scheduleLeaseRecoveryWatchdog(ctx: any, _nowMs: number) {
   const delayMs = DEFAULT_CONFIG.lease.leaseMs + 1_000;
   try {
     await ctx.scheduler.runAfter(delayMs, (internal.scheduler as any).reconcileWorkerPoolInternal, {
@@ -2220,6 +2320,60 @@ function computeNextScheduledShutdownAt(
   }
   const shutdownBaseMs = worker.lastClaimAt ?? nowMs;
   return worker.scheduledShutdownAt ?? shutdownBaseMs + DEFAULT_CONFIG.scaling.idleTimeoutMs;
+}
+
+function getAssignmentForCompletedConversation(
+  worker: {
+    assignment?: {
+      conversationId: string;
+      agentKey: string;
+      leaseId: string;
+      assignedAt: number;
+    };
+  },
+  message: {
+    conversationId: string;
+    agentKey: string;
+    leaseId?: string;
+  },
+) {
+  if (
+    worker.assignment &&
+    worker.assignment.conversationId === message.conversationId &&
+    worker.assignment.agentKey === message.agentKey
+  ) {
+    return {
+      ...worker.assignment,
+      leaseId: message.leaseId ?? worker.assignment.leaseId,
+    };
+  }
+  return worker.assignment;
+}
+
+function clearAssignmentForMessage(
+  worker: {
+    assignment?: {
+      conversationId: string;
+      agentKey: string;
+      leaseId: string;
+      assignedAt: number;
+    };
+  },
+  message: {
+    conversationId: string;
+    agentKey: string;
+  },
+  nextLoad: number,
+) {
+  if (
+    nextLoad === 0 &&
+    worker.assignment &&
+    worker.assignment.conversationId === message.conversationId &&
+    worker.assignment.agentKey === message.agentKey
+  ) {
+    return undefined;
+  }
+  return worker.assignment;
 }
 
 function dedupeMessagesById<T extends { _id: string }>(messages: Array<T>): Array<T> {

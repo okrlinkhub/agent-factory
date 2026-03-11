@@ -119,6 +119,14 @@ export default defineSchema({
     scheduledShutdownAt: v.optional(v.number()),
     stoppedAt: v.optional(v.number()),
     lastSnapshotId: v.optional(v.id("dataSnapshots")),
+    assignment: v.optional(
+      v.object({
+        conversationId: v.string(),
+        agentKey: v.string(),
+        leaseId: v.string(),
+        assignedAt: v.number(),
+      }),
+    ),
     capabilities: v.array(v.string()),
   })
     .index("by_workerId", ["workerId"])

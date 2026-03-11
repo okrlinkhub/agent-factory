@@ -242,7 +242,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       claim: FunctionReference<
         "mutation",
         "internal",
-        { nowMs?: number; workerId: string },
+        { conversationId?: string; nowMs?: number; workerId: string },
         null | {
           agentKey: string;
           conversationId: string;
@@ -1234,7 +1234,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       claimNextJob: FunctionReference<
         "mutation",
         "internal",
-        { nowMs?: number; workerId: string },
+        { conversationId?: string; nowMs?: number; workerId: string },
         null | {
           agentKey: string;
           conversationId: string;
