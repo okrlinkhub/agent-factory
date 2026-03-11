@@ -1091,6 +1091,196 @@ describe("component lib", () => {
     expect(reconcile.activeWorkers).toBe(2);
   });
 
+  test("scheduler should forward OpenClaw bridge env to spawned machines", async () => {
+    const t = initConvexTest();
+    const nowMs = Date.UTC(2026, 0, 1, 17, 5, 0);
+    vi.setSystemTime(nowMs);
+    let machineCreateBody:
+      | {
+          config?: {
+            env?: Record<string, string>;
+          };
+        }
+      | null = null;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/machines`) && method === "GET") {
+        return jsonResponse([]);
+      }
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/volumes`) && method === "GET") {
+        return jsonResponse([]);
+      }
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/volumes`) && method === "POST") {
+        return jsonResponse({
+          id: "vol-forwarded-env",
+          name: buildDedicatedVolumeName(TEST_PROVIDER_CONFIG.volumeName, `afw-${nowMs}-0`),
+          region: TEST_PROVIDER_CONFIG.region,
+        });
+      }
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/machines`) && method === "POST") {
+        machineCreateBody = JSON.parse(String(init?.body ?? "{}")) as {
+          config?: {
+            env?: Record<string, string>;
+          };
+        };
+        return jsonResponse({
+          id: "machine-forwarded-env",
+          name: "afw-forwarded-env",
+          region: TEST_PROVIDER_CONFIG.region,
+          state: "started",
+          config: { image: TEST_PROVIDER_CONFIG.image },
+        });
+      }
+      throw new Error(`Unexpected fetch ${method} ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await t.mutation(api.queue.upsertAgentProfile, {
+      agentKey: "support-agent",
+      version: "1.0.0",
+      secretsRef: [],
+      bridgeConfig: {
+        enabled: true,
+        serviceId: "openclaw-prod",
+      },
+      enabled: true,
+    });
+    await t.mutation(api.queue.importPlaintextSecret, {
+      secretRef: "fly.apiToken",
+      plaintextValue: "fly-token",
+    });
+    await t.mutation(api.queue.importPlaintextSecret, {
+      secretRef: "convex.url",
+      plaintextValue: "https://example.convex.cloud",
+    });
+    await t.mutation(api.queue.importPlaintextSecret, {
+      secretRef: "agent-bridge.serviceKey",
+      plaintextValue: "abs_live_bridge_key",
+    });
+    await t.mutation(api.queue.enqueueMessage, {
+      conversationId: "telegram:chat:spawn-env",
+      agentKey: "support-agent",
+      payload: {
+        provider: "telegram",
+        providerUserId: "u-spawn-env",
+        messageText: "hello",
+      },
+    });
+
+    const reconcile = await t.action(api.scheduler.reconcileWorkerPool, {
+      nowMs,
+      flyApiToken: "fly-token",
+      convexUrl: "https://example.convex.cloud",
+      scalingPolicy: {
+        maxWorkers: 5,
+        queuePerWorkerTarget: 1,
+        spawnStep: 1,
+        idleTimeoutMs: 300_000,
+        reconcileIntervalMs: 15_000,
+      },
+      providerConfig: TEST_PROVIDER_CONFIG,
+    });
+
+    expect(reconcile.spawned).toBe(1);
+    expect(machineCreateBody).not.toBeNull();
+    expect(machineCreateBody!.config?.env?.OPENCLAW_SERVICE_ID).toBe("openclaw-prod");
+    expect(machineCreateBody!.config?.env?.OPENCLAW_SERVICE_KEY).toBe("abs_live_bridge_key");
+  });
+
+  test("scheduler should omit unresolved OpenClaw bridge env keys from spawned machines", async () => {
+    const t = initConvexTest();
+    const nowMs = Date.UTC(2026, 0, 1, 17, 6, 0);
+    vi.setSystemTime(nowMs);
+    let machineCreateBody:
+      | {
+          config?: {
+            env?: Record<string, string>;
+          };
+        }
+      | null = null;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/machines`) && method === "GET") {
+        return jsonResponse([]);
+      }
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/volumes`) && method === "GET") {
+        return jsonResponse([]);
+      }
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/volumes`) && method === "POST") {
+        return jsonResponse({
+          id: "vol-forwarded-env-missing",
+          name: buildDedicatedVolumeName(TEST_PROVIDER_CONFIG.volumeName, `afw-${nowMs}-0`),
+          region: TEST_PROVIDER_CONFIG.region,
+        });
+      }
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/machines`) && method === "POST") {
+        machineCreateBody = JSON.parse(String(init?.body ?? "{}")) as {
+          config?: {
+            env?: Record<string, string>;
+          };
+        };
+        return jsonResponse({
+          id: "machine-forwarded-env-missing",
+          name: "afw-forwarded-env-missing",
+          region: TEST_PROVIDER_CONFIG.region,
+          state: "started",
+          config: { image: TEST_PROVIDER_CONFIG.image },
+        });
+      }
+      throw new Error(`Unexpected fetch ${method} ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await t.mutation(api.queue.upsertAgentProfile, {
+      agentKey: "support-agent",
+      version: "1.0.0",
+      secretsRef: [],
+      bridgeConfig: {
+        enabled: true,
+        serviceId: "openclaw-prod",
+      },
+      enabled: true,
+    });
+    await t.mutation(api.queue.importPlaintextSecret, {
+      secretRef: "fly.apiToken",
+      plaintextValue: "fly-token",
+    });
+    await t.mutation(api.queue.importPlaintextSecret, {
+      secretRef: "convex.url",
+      plaintextValue: "https://example.convex.cloud",
+    });
+    await t.mutation(api.queue.enqueueMessage, {
+      conversationId: "telegram:chat:spawn-env-missing",
+      agentKey: "support-agent",
+      payload: {
+        provider: "telegram",
+        providerUserId: "u-spawn-env-missing",
+        messageText: "hello",
+      },
+    });
+
+    const reconcile = await t.action(api.scheduler.reconcileWorkerPool, {
+      nowMs,
+      flyApiToken: "fly-token",
+      convexUrl: "https://example.convex.cloud",
+      scalingPolicy: {
+        maxWorkers: 5,
+        queuePerWorkerTarget: 1,
+        spawnStep: 1,
+        idleTimeoutMs: 300_000,
+        reconcileIntervalMs: 15_000,
+      },
+      providerConfig: TEST_PROVIDER_CONFIG,
+    });
+
+    expect(reconcile.spawned).toBe(1);
+    expect(machineCreateBody).not.toBeNull();
+    expect(machineCreateBody!.config?.env?.OPENCLAW_SERVICE_ID).toBe("openclaw-prod");
+    expect(machineCreateBody!.config?.env).not.toHaveProperty("OPENCLAW_SERVICE_KEY");
+  });
+
   test("worker assignment should prevent cross-conversation claims after completion", async () => {
     const t = initConvexTest();
     const nowMs = Date.UTC(2026, 0, 1, 17, 30, 0);

@@ -78,6 +78,10 @@ const bridgeRuntimeConfigValidator = v.object({
   serviceKey: v.union(v.null(), v.string()),
   serviceKeySecretRef: v.union(v.null(), v.string()),
 });
+const workerSpawnOpenClawEnvValidator = v.object({
+  OPENCLAW_SERVICE_ID: v.optional(v.string()),
+  OPENCLAW_SERVICE_KEY: v.optional(v.string()),
+});
 
 const messageRuntimeConfigValidator = v.object({
   systemPrompt: v.optional(v.string()),
@@ -395,6 +399,34 @@ export const getActiveSecretPlaintext = internalQuery({
       return null;
     }
     return decryptSecretValue(active.encryptedValue, active.algorithm);
+  },
+});
+
+export const getWorkerSpawnOpenClawEnv = internalQuery({
+  args: {},
+  returns: workerSpawnOpenClawEnvValidator,
+  handler: async (ctx) => {
+    const [, globalServiceId] = await resolveFirstActiveSecretValue(ctx, [BRIDGE_SECRET_REFS.serviceId]);
+    const [, globalServiceKey] = await resolveFirstActiveSecretValue(ctx, [BRIDGE_SECRET_REFS.serviceKey]);
+    const bridgeProfiles = await ctx.db
+      .query("agentProfiles")
+      .withIndex("by_enabled", (q) => q.eq("enabled", true))
+      .collect();
+    const serviceId =
+      globalServiceId ?? (await resolveUnambiguousBridgeProfileServiceId(ctx, bridgeProfiles));
+    const serviceKey =
+      globalServiceKey ?? (await resolveUnambiguousBridgeProfileServiceKey(ctx, bridgeProfiles));
+    const env: {
+      OPENCLAW_SERVICE_ID?: string;
+      OPENCLAW_SERVICE_KEY?: string;
+    } = {};
+    if (serviceId) {
+      env.OPENCLAW_SERVICE_ID = serviceId;
+    }
+    if (serviceKey) {
+      env.OPENCLAW_SERVICE_KEY = serviceKey;
+    }
+    return env;
   },
 });
 
@@ -2271,6 +2303,63 @@ async function resolveBridgeRuntimeConfig(
   };
 }
 
+async function resolveUnambiguousBridgeProfileServiceId(
+  ctx: any,
+  profiles: Array<{
+    agentKey: string;
+    bridgeConfig?: {
+      enabled: boolean;
+      serviceId?: string;
+    };
+  }>,
+): Promise<string | null> {
+  const values = new Set<string>();
+  for (const profile of profiles) {
+    if (!profile.bridgeConfig?.enabled) {
+      continue;
+    }
+    const [, serviceId] = await resolveFirstActiveSecretValue(
+      ctx,
+      getScopedSecretRefCandidates(profile.agentKey, BRIDGE_SECRET_REFS.serviceId),
+    );
+    const resolvedServiceId = profile.bridgeConfig.serviceId ?? serviceId;
+    if (resolvedServiceId) {
+      values.add(resolvedServiceId);
+    }
+  }
+  return uniqueValueOrNull(values);
+}
+
+async function resolveUnambiguousBridgeProfileServiceKey(
+  ctx: any,
+  profiles: Array<{
+    agentKey: string;
+    bridgeConfig?: {
+      enabled: boolean;
+      serviceKeySecretRef?: string;
+    };
+  }>,
+): Promise<string | null> {
+  const values = new Set<string>();
+  for (const profile of profiles) {
+    if (!profile.bridgeConfig?.enabled) {
+      continue;
+    }
+    const [, serviceKey] = await resolveFirstActiveSecretValue(
+      ctx,
+      getScopedSecretRefCandidates(
+        profile.agentKey,
+        BRIDGE_SECRET_REFS.serviceKey,
+        profile.bridgeConfig.serviceKeySecretRef ?? null,
+      ),
+    );
+    if (serviceKey) {
+      values.add(serviceKey);
+    }
+  }
+  return uniqueValueOrNull(values);
+}
+
 function appendSystemPromptToMessage(messageText: string, systemPrompt?: string): string {
   const normalizedSystemPrompt = normalizeSystemPrompt(systemPrompt);
   if (normalizedSystemPrompt === null) {
@@ -2498,6 +2587,13 @@ async function resolveFirstActiveSecretValue(
     }
   }
   return [null, null];
+}
+
+function uniqueValueOrNull(values: Set<string>): string | null {
+  if (values.size !== 1) {
+    return null;
+  }
+  return values.values().next().value ?? null;
 }
 
 function fingerprintConversationDelta(

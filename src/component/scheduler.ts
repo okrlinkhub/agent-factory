@@ -336,6 +336,10 @@ async function runWorkerLifecycleCycle(
       staleHeartbeatCutoff,
     );
     if (input.desiredActiveWorkers > claimableWorkers) {
+      const forwardedOpenClawEnv = await ctx.runQuery(
+        (internal.queue as any).getWorkerSpawnOpenClawEnv,
+        {},
+      );
       const toSpawn = Math.min(
         input.scaling.spawnStep,
         input.desiredActiveWorkers - claimableWorkers,
@@ -350,13 +354,14 @@ async function runWorkerLifecycleCycle(
           volumeName: input.providerConfig.volumeName,
           volumePath: input.providerConfig.volumePath,
           volumeSizeGb: input.providerConfig.volumeSizeGb,
-          env: {
+          env: compactEnv({
             ...DEFAULT_WORKER_RUNTIME_ENV,
+            ...forwardedOpenClawEnv,
             CONVEX_URL: input.convexUrl ?? "",
             WORKSPACE_ID: input.workspaceId ?? "default",
             WORKER_ID: workerId,
             WORKER_IDLE_TIMEOUT_MS: String(input.scaling.idleTimeoutMs),
-          },
+          }),
         });
         await ctx.runMutation(internal.queue.upsertWorkerState, {
           workerId: created.workerId,
@@ -753,6 +758,19 @@ async function resolveProviderConfigWithFallback(
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function compactEnv(
+  env: Record<string, string | null | undefined>,
+): Record<string, string> {
+  const compacted: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (!value || value.trim().length === 0) {
+      continue;
+    }
+    compacted[key] = value;
+  }
+  return compacted;
 }
 
 function filterScopedWorkers(workerRows: Array<SchedulerWorkerRow>, appName: string) {
