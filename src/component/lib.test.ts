@@ -1163,6 +1163,68 @@ describe("component lib", () => {
     });
   });
 
+  test("exclusive ownership should block another worker and let the owner reclaim", async () => {
+    const t = initConvexTest();
+    const nowMs = Date.UTC(2026, 0, 1, 17, 40, 0);
+    vi.setSystemTime(nowMs);
+    await t.mutation(api.queue.upsertAgentProfile, {
+      agentKey: "support-agent",
+      version: "1.0.0",
+      secretsRef: [],
+      enabled: true,
+    });
+
+    const conversationId = "telegram:chat:exclusive-owner";
+    const firstMessageId = await t.mutation(api.queue.enqueueMessage, {
+      conversationId,
+      agentKey: "support-agent",
+      payload: {
+        provider: "telegram",
+        providerUserId: "u-exclusive-1",
+        messageText: "first",
+      },
+      nowMs,
+    });
+    const firstClaim = await t.mutation(api.lib.claim, {
+      workerId: "worker-exclusive-1",
+      conversationId,
+      nowMs,
+    });
+    expect(firstClaim?.messageId).toBe(firstMessageId);
+
+    await t.mutation(api.lib.complete, {
+      workerId: "worker-exclusive-1",
+      messageId: firstMessageId,
+      leaseId: firstClaim?.leaseId ?? "",
+      nowMs: nowMs + 1_000,
+    });
+
+    const secondMessageId = await t.mutation(api.queue.enqueueMessage, {
+      conversationId,
+      agentKey: "support-agent",
+      payload: {
+        provider: "telegram",
+        providerUserId: "u-exclusive-2",
+        messageText: "second",
+      },
+      nowMs: nowMs + 2_000,
+    });
+
+    const blockedClaim = await t.mutation(api.lib.claim, {
+      workerId: "worker-exclusive-2",
+      conversationId,
+      nowMs: nowMs + 2_000,
+    });
+    expect(blockedClaim).toBeNull();
+
+    const ownerReclaim = await t.mutation(api.lib.claim, {
+      workerId: "worker-exclusive-1",
+      nowMs: nowMs + 2_000,
+    });
+    expect(ownerReclaim?.messageId).toBe(secondMessageId);
+    expect(ownerReclaim?.conversationId).toBe(conversationId);
+  });
+
   test("scheduler should spawn when only an idle worker pinned to another conversation exists", async () => {
     const t = initConvexTest();
     const nowMs = Date.UTC(2026, 0, 1, 17, 45, 0);
@@ -1263,6 +1325,185 @@ describe("component lib", () => {
 
     expect(reconcile.spawned).toBe(1);
     expect(reconcile.activeWorkers).toBe(2);
+  });
+
+  test("stale owner should allow another worker to take over the conversation", async () => {
+    const t = initConvexTest();
+    const nowMs = Date.UTC(2026, 0, 1, 17, 47, 0);
+    vi.setSystemTime(nowMs);
+    await t.mutation(api.queue.upsertAgentProfile, {
+      agentKey: "support-agent",
+      version: "1.0.0",
+      secretsRef: [],
+      enabled: true,
+    });
+
+    const conversationId = "telegram:chat:stale-owner";
+    const firstMessageId = await t.mutation(api.queue.enqueueMessage, {
+      conversationId,
+      agentKey: "support-agent",
+      payload: {
+        provider: "telegram",
+        providerUserId: "u-stale-1",
+        messageText: "first",
+      },
+      nowMs,
+    });
+    const firstClaim = await t.mutation(api.lib.claim, {
+      workerId: "worker-stale-1",
+      conversationId,
+      nowMs,
+    });
+    expect(firstClaim?.messageId).toBe(firstMessageId);
+
+    await t.mutation(api.lib.complete, {
+      workerId: "worker-stale-1",
+      messageId: firstMessageId,
+      leaseId: firstClaim?.leaseId ?? "",
+      nowMs: nowMs + 1_000,
+    });
+
+    await t.run(async (ctx) => {
+      const worker = await ctx.db
+        .query("workers")
+        .withIndex("by_workerId", (q) => q.eq("workerId", "worker-stale-1"))
+        .unique();
+      expect(worker).not.toBeNull();
+      await ctx.db.patch(worker!._id, {
+        heartbeatAt: nowMs + 2_000 - DEFAULT_CONFIG.lease.staleAfterMs - 1,
+      });
+    });
+
+    const secondMessageId = await t.mutation(api.queue.enqueueMessage, {
+      conversationId,
+      agentKey: "support-agent",
+      payload: {
+        provider: "telegram",
+        providerUserId: "u-stale-2",
+        messageText: "second",
+      },
+      nowMs: nowMs + 2_000,
+    });
+
+    const takeoverClaim = await t.mutation(api.lib.claim, {
+      workerId: "worker-stale-2",
+      conversationId,
+      nowMs: nowMs + 2_000,
+    });
+    expect(takeoverClaim?.messageId).toBe(secondMessageId);
+    expect(takeoverClaim?.conversationId).toBe(conversationId);
+  });
+
+  test("scheduler should dedupe duplicated sticky workers for the same conversation", async () => {
+    const t = initConvexTest();
+    const nowMs = Date.UTC(2026, 0, 1, 17, 48, 0);
+    vi.setSystemTime(nowMs);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/machines`) && method === "GET") {
+        return jsonResponse([]);
+      }
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/volumes`) && method === "GET") {
+        return jsonResponse([]);
+      }
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/volumes`) && method === "POST") {
+        return jsonResponse({
+          id: "vol-deduped-sticky-worker",
+          name: buildDedicatedVolumeName(TEST_PROVIDER_CONFIG.volumeName, "afw-deduped"),
+          region: TEST_PROVIDER_CONFIG.region,
+        });
+      }
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/machines`) && method === "POST") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { name?: string };
+        return jsonResponse({
+          id: "machine-deduped-sticky-worker",
+          name: body.name,
+          region: TEST_PROVIDER_CONFIG.region,
+          state: "started",
+          config: { image: TEST_PROVIDER_CONFIG.image },
+        });
+      }
+      throw new Error(`Unexpected fetch ${method} ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await t.mutation(api.queue.upsertAgentProfile, {
+      agentKey: "support-agent",
+      version: "1.0.0",
+      secretsRef: [],
+      enabled: true,
+    });
+    await t.mutation(api.queue.importPlaintextSecret, {
+      secretRef: "fly.apiToken",
+      plaintextValue: "fly-token",
+    });
+    await t.mutation(api.queue.importPlaintextSecret, {
+      secretRef: "convex.url",
+      plaintextValue: "https://example.convex.cloud",
+    });
+    await t.mutation(api.queue.enqueueMessage, {
+      conversationId: "telegram:chat:dedupe-a",
+      agentKey: "support-agent",
+      payload: {
+        provider: "telegram",
+        providerUserId: "u-dedupe-a",
+        messageText: "first",
+      },
+      nowMs,
+    });
+    await t.mutation(api.queue.enqueueMessage, {
+      conversationId: "telegram:chat:dedupe-b",
+      agentKey: "support-agent",
+      payload: {
+        provider: "telegram",
+        providerUserId: "u-dedupe-b",
+        messageText: "second",
+      },
+      nowMs,
+    });
+
+    await t.run(async (ctx) => {
+      for (const workerId of ["worker-dedupe-1", "worker-dedupe-2", "worker-dedupe-3"]) {
+        await ctx.db.insert("workers", {
+          workerId,
+          provider: "fly",
+          status: "active",
+          load: 0,
+          heartbeatAt: nowMs,
+          lastClaimAt: nowMs,
+          scheduledShutdownAt: nowMs + 300_000,
+          assignment: {
+            conversationId: "telegram:chat:dedupe-a",
+            agentKey: "support-agent",
+            leaseId: `${workerId}-lease`,
+            assignedAt: nowMs,
+          },
+          machineRef: {
+            appName: TEST_PROVIDER_CONFIG.appName,
+            machineId: `${workerId}-machine`,
+            region: TEST_PROVIDER_CONFIG.region,
+          },
+          capabilities: [],
+        });
+      }
+    });
+
+    const reconcile = await t.action(api.scheduler.reconcileWorkerPool, {
+      nowMs,
+      flyApiToken: "fly-token",
+      convexUrl: "https://example.convex.cloud",
+      scalingPolicy: {
+        maxWorkers: 5,
+        queuePerWorkerTarget: 1,
+        spawnStep: 1,
+        idleTimeoutMs: 300_000,
+        reconcileIntervalMs: 15_000,
+      },
+      providerConfig: TEST_PROVIDER_CONFIG,
+    });
+
+    expect(reconcile.spawned).toBe(1);
   });
 
   test("snapshot restore should require a matching conversation when conversationId is provided", async () => {

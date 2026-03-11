@@ -1041,6 +1041,7 @@ export const claimNextJob = mutation({
   returns: v.union(v.null(), claimedJobValidator),
   handler: async (ctx, args) => {
     const nowMs = args.nowMs ?? Date.now();
+    const staleHeartbeatCutoff = nowMs - DEFAULT_CONFIG.lease.staleAfterMs;
     const worker = await ctx.db
       .query("workers")
       .withIndex("by_workerId", (q) => q.eq("workerId", args.workerId))
@@ -1055,6 +1056,7 @@ export const claimNextJob = mutation({
     ) {
       return null;
     }
+    const workers = await ctx.db.query("workers").collect();
     const candidates = await ctx.db
       .query("messageQueue")
       .withIndex("by_status_and_scheduledFor", (q) =>
@@ -1091,6 +1093,15 @@ export const claimNextJob = mutation({
         worker?.assignment &&
         conversation.agentKey !== worker.assignment.agentKey
       ) {
+        continue;
+      }
+      const existingOwner = findActiveAssignmentOwner(workers, {
+        conversationId: candidate.conversationId,
+        agentKey: candidate.agentKey,
+        excludeWorkerId: args.workerId,
+        staleHeartbeatCutoff,
+      });
+      if (existingOwner) {
         continue;
       }
 
@@ -2374,6 +2385,35 @@ function clearAssignmentForMessage(
     return undefined;
   }
   return worker.assignment;
+}
+
+function findActiveAssignmentOwner(
+  workers: Array<{
+    workerId: string;
+    status: "active" | "draining" | "stopping" | "stopped";
+    heartbeatAt: number;
+    assignment?: {
+      conversationId: string;
+      agentKey: string;
+      leaseId: string;
+      assignedAt: number;
+    };
+  }>,
+  args: {
+    conversationId: string;
+    agentKey: string;
+    excludeWorkerId: string;
+    staleHeartbeatCutoff: number;
+  },
+) {
+  return workers.find(
+    (candidate) =>
+      candidate.workerId !== args.excludeWorkerId &&
+      isWorkerClaimable(candidate.status) &&
+      candidate.heartbeatAt > args.staleHeartbeatCutoff &&
+      candidate.assignment?.conversationId === args.conversationId &&
+      candidate.assignment.agentKey === args.agentKey,
+  );
 }
 
 function dedupeMessagesById<T extends { _id: string }>(messages: Array<T>): Array<T> {

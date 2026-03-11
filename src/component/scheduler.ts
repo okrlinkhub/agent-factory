@@ -765,20 +765,23 @@ function countWorkersAvailableForActiveConversations(
   staleHeartbeatCutoff: number,
 ) {
   const activeConversationSet = new Set(activeConversationIds);
-  let available = 0;
+  const assignedConversationKeys = new Set<string>();
+  let unassignedWorkers = 0;
   for (const worker of workerRows) {
     if (!isWorkerClaimable(worker.status) || worker.heartbeatAt <= staleHeartbeatCutoff) {
       continue;
     }
     if (!worker.assignment) {
-      available += 1;
+      unassignedWorkers += 1;
       continue;
     }
     if (activeConversationSet.has(worker.assignment.conversationId)) {
-      available += 1;
+      assignedConversationKeys.add(
+        `${worker.assignment.agentKey}::${worker.assignment.conversationId}`,
+      );
     }
   }
-  return available;
+  return unassignedWorkers + assignedConversationKeys.size;
 }
 
 function deriveScheduledShutdownAt(
