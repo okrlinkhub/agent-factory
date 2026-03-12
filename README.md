@@ -519,6 +519,24 @@ Any new skill you want inside OpenClaw agents must be added to the worker image 
 
 Fork this repository to maintain your own image with your custom skills/assets.
 
+For `globalSkills` managed by this component, the recommended runtime pattern is different:
+- store the source of truth in component tables `globalSkills`, `globalSkillVersions`, `globalSkillReleases`
+- expose them through `getWorkerGlobalSkillsManifest`
+- let the worker image materialize them into `OPENCLAW_SKILLS_DIR` during prestart, before the OpenClaw gateway boots
+
+The manifest now carries an explicit on-disk layout contract for OpenClaw workspace skills:
+- `layoutVersion = openclaw-workspace-skill-v1`
+- `skillDirName`
+- `files[]` with `path`, `content`, `sha256`
+
+Recommended worker bootstrap order:
+1. restore snapshot into `/data`
+2. fetch `workerGlobalSkillsManifest`
+3. verify checksums and materialize skills atomically into `OPENCLAW_SKILLS_DIR`
+4. start the OpenClaw gateway only after skills are ready
+
+This avoids the historical race where the gateway could start before restored or DB-backed skills were present on disk.
+
 First required flow:
 1) Take the image repo (fork/clone your own `openclaw-okr-image`).
 2) Build and deploy it on your own Fly app.

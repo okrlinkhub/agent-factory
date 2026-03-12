@@ -92,6 +92,12 @@ const globalSkillStatusValidator = v.union(v.literal("active"), v.literal("disab
 const globalSkillReleaseChannelValidator = v.union(v.literal("stable"), v.literal("canary"));
 const globalSkillModuleFormatValidator = v.union(v.literal("esm"), v.literal("cjs"));
 
+const globalSkillManifestFileValidator = v.object({
+  path: v.string(),
+  content: v.string(),
+  sha256: v.string(),
+});
+
 const globalSkillManifestItemValidator = v.object({
   slug: v.string(),
   version: v.string(),
@@ -99,6 +105,8 @@ const globalSkillManifestItemValidator = v.object({
   entryPoint: v.string(),
   sourceJs: v.string(),
   sha256: v.string(),
+  skillDirName: v.string(),
+  files: v.array(globalSkillManifestFileValidator),
 });
 
 const BRIDGE_SECRET_REFS = {
@@ -861,6 +869,7 @@ export const getWorkerGlobalSkillsManifest = query({
     releaseChannel: v.optional(globalSkillReleaseChannelValidator),
   },
   returns: v.object({
+    layoutVersion: v.literal("openclaw-workspace-skill-v1"),
     manifestVersion: v.string(),
     generatedAt: v.number(),
     releaseChannel: globalSkillReleaseChannelValidator,
@@ -883,6 +892,12 @@ export const getWorkerGlobalSkillsManifest = query({
       entryPoint: string;
       sourceJs: string;
       sha256: string;
+      skillDirName: string;
+      files: Array<{
+        path: string;
+        content: string;
+        sha256: string;
+      }>;
     }> = [];
 
     for (const skill of sortedSkills) {
@@ -896,6 +911,14 @@ export const getWorkerGlobalSkillsManifest = query({
 
       const version = await ctx.db.get(activeRelease.versionId);
       if (!version) continue;
+      const materializedSkill = await buildGlobalSkillMaterialization({
+        slug: skill.slug,
+        version: version.version,
+        moduleFormat: version.moduleFormat,
+        entryPoint: version.entryPoint,
+        sourceJs: version.sourceJs,
+        sha256: version.sha256,
+      });
       manifestSkills.push({
         slug: skill.slug,
         version: version.version,
@@ -903,6 +926,8 @@ export const getWorkerGlobalSkillsManifest = query({
         entryPoint: version.entryPoint,
         sourceJs: version.sourceJs,
         sha256: version.sha256,
+        skillDirName: materializedSkill.skillDirName,
+        files: materializedSkill.files,
       });
     }
 
@@ -917,6 +942,7 @@ export const getWorkerGlobalSkillsManifest = query({
     const manifestVersion = await computeSha256Hex(fingerprintSeed || "empty");
 
     return {
+      layoutVersion: "openclaw-workspace-skill-v1" as const,
       manifestVersion,
       generatedAt: nowMs,
       releaseChannel,
@@ -2543,6 +2569,80 @@ function normalizeSystemPrompt(systemPrompt?: string | null): string | null {
   }
   const normalizedSystemPrompt = systemPrompt.trim();
   return normalizedSystemPrompt.length > 0 ? normalizedSystemPrompt : null;
+}
+
+async function buildGlobalSkillMaterialization(skill: {
+  slug: string;
+  version: string;
+  moduleFormat: "esm" | "cjs";
+  entryPoint: string;
+  sourceJs: string;
+  sha256: string;
+}): Promise<{
+  skillDirName: string;
+  files: Array<{
+    path: string;
+    content: string;
+    sha256: string;
+  }>;
+}> {
+  const skillDirName = normalizeGlobalSkillDirName(skill.slug);
+  const scriptExt = skill.moduleFormat === "cjs" ? "cjs" : "mjs";
+  const scriptRelativePath = `scripts/index.${scriptExt}`;
+  const skillMd = [
+    "---",
+    `name: ${skill.slug}`,
+    `description: Global skill ${skill.slug}@${skill.version} provisioned by agent-factory.`,
+    "---",
+    "",
+    "# Global Skill",
+    "",
+    "This skill is generated automatically from agent-factory globalSkills.",
+    "",
+    `- slug: ${skill.slug}`,
+    `- version: ${skill.version}`,
+    `- entryPoint: ${skill.entryPoint}`,
+    `- moduleFormat: ${skill.moduleFormat}`,
+    "",
+    "Do not edit manually.",
+    "",
+  ].join("\n");
+  const markerJson = `${JSON.stringify(
+    {
+      slug: skill.slug,
+      version: skill.version,
+      sha256: skill.sha256,
+      managedBy: "agent-factory",
+      entryPoint: skill.entryPoint,
+      moduleFormat: skill.moduleFormat,
+      generatedAt: Date.now(),
+    },
+    null,
+    2,
+  )}\n`;
+  const files = [
+    {
+      path: "SKILL.md",
+      content: `${skillMd}\n`,
+      sha256: await computeSha256Hex(`${skillMd}\n`),
+    },
+    {
+      path: scriptRelativePath,
+      content: `${skill.sourceJs.trimEnd()}\n`,
+      sha256: await computeSha256Hex(`${skill.sourceJs.trimEnd()}\n`),
+    },
+    {
+      path: ".af-global-skill.json",
+      content: markerJson,
+      sha256: await computeSha256Hex(markerJson),
+    },
+  ];
+  return { skillDirName, files };
+}
+
+function normalizeGlobalSkillDirName(slug: string): string {
+  const normalized = slug.trim().toLowerCase().replace(/[^a-z0-9-_]/g, "-");
+  return normalized.length > 0 ? normalized : "unnamed-skill";
 }
 
 function getBridgeSecretRefsForProfile(

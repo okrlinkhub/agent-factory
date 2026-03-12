@@ -1499,12 +1499,15 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         },
         {
           generatedAt: number;
+          layoutVersion: "openclaw-workspace-skill-v1";
           manifestVersion: string;
           releaseChannel: "stable" | "canary";
           skills: Array<{
             entryPoint: string;
+            files: Array<{ content: string; path: string; sha256: string }>;
             moduleFormat: "esm" | "cjs";
             sha256: string;
+            skillDirName: string;
             slug: string;
             sourceJs: string;
             version: string;
