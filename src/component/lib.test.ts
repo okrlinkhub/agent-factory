@@ -316,7 +316,7 @@ describe("component lib", () => {
     const worker = workers.find((row: { workerId: string }) => row.workerId === "worker-2");
     expect(worker?.status).toBe("active");
     expect(worker?.load).toBe(0);
-    expect(worker?.scheduledShutdownAt).toBe(now + 300_000);
+    expect(worker?.scheduledShutdownAt).toBe(now + DEFAULT_CONFIG.scaling.idleTimeoutMs);
   });
 
   test("idle shutdown should move worker to draining and prevent reactivation", async () => {
@@ -365,7 +365,7 @@ describe("component lib", () => {
       providerConfig: TEST_PROVIDER_CONFIG,
     } as any);
 
-    const dueTime = claimTime + 300_001;
+    const dueTime = claimTime + DEFAULT_CONFIG.scaling.idleTimeoutMs + 1;
     vi.setSystemTime(dueTime);
     const shutdown = await t.action(api.scheduler.checkIdleShutdowns, {
       nowMs: dueTime,
@@ -377,7 +377,7 @@ describe("component lib", () => {
     const workers = await t.query((internal.queue as any).listWorkersForScheduler, {});
     const worker = workers.find((row: { workerId: string }) => row.workerId === "worker-stop-force-1");
     expect(worker?.status).toBe("draining");
-    expect(worker?.scheduledShutdownAt).toBe(claimTime + 300_000);
+    expect(worker?.scheduledShutdownAt).toBe(claimTime + DEFAULT_CONFIG.scaling.idleTimeoutMs);
     expect(worker?.stoppedAt).toBeNull();
 
     const control = await t.query(api.queue.getWorkerControlState as any, {
@@ -585,7 +585,7 @@ describe("component lib", () => {
       providerConfig: TEST_PROVIDER_CONFIG,
     });
 
-    const dueTime = claimTime + 300_001;
+    const dueTime = claimTime + DEFAULT_CONFIG.scaling.idleTimeoutMs + 1;
     vi.setSystemTime(dueTime);
     const firstPass = await t.action(api.scheduler.checkIdleShutdowns, {
       nowMs: dueTime,
@@ -1828,15 +1828,15 @@ describe("component lib", () => {
       flyApiToken: "fly-token",
       providerConfig: TEST_PROVIDER_CONFIG,
     });
-    expect(result.stopped).toBe(1);
-    expect(result.pending).toBe(1);
+    expect(result.stopped).toBe(0);
+    expect(result.pending).toBe(0);
 
     const workers = await t.query((internal.queue as any).listWorkersForScheduler, {});
     const worker = workers.find(
       (row: { workerId: string }) => row.workerId === "worker-missing-shutdown-1",
     );
-    expect(worker?.status).toBe("draining");
-    expect(worker?.scheduledShutdownAt).toBe(nowMs - 300_000);
+    expect(worker?.status).toBe("active");
+    expect(worker?.scheduledShutdownAt).toBe((nowMs - 600_000) + DEFAULT_CONFIG.scaling.idleTimeoutMs);
   });
 
   test("provider-stopped machines should not remain active in the worker table", async () => {

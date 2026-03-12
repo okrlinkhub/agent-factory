@@ -456,7 +456,7 @@ Hydration/runtime tables:
 - `1.0.0`: scheduler reconcile now uses provider-observed machine state and no longer treats every `active` row as reusable capacity.
 - `1.0.0`: stuck `processing` jobs are recovered more aggressively, including inconsistent rows missing valid lease metadata.
 - `1.0.0`: idle workers without `scheduledShutdownAt` are backfilled automatically during reconcile/watchdog flows.
-- `idleTimeoutMs` aligned to 5 minutes and `workers.scheduledShutdownAt` now tracks idle lifecycle from `lastClaimAt`.
+- `idleTimeoutMs` aligned to 30 minutes and `workers.scheduledShutdownAt` now tracks idle lifecycle from `lastClaimAt`.
 - Pre-stop drain protocol added: worker snapshots `/data` before termination and uploads archive metadata into `dataSnapshots`.
 - Restore on boot added: new workers can rehydrate from latest snapshot archive.
 - Hydration improved with `conversationHydrationCache` delta usage.

@@ -165,7 +165,7 @@ export const DEFAULT_CONFIG: AgentFactoryConfig = {
     maxWorkers: 1,
     queuePerWorkerTarget: 5,
     spawnStep: 1,
-    idleTimeoutMs: 300_000,
+    idleTimeoutMs: 1_800_000,
     reconcileIntervalMs: 15_000,
   },
   hydration: {
