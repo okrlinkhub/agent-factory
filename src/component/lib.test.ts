@@ -1158,6 +1158,10 @@ describe("component lib", () => {
       secretRef: "agent-bridge.serviceKey",
       plaintextValue: "abs_live_bridge_key",
     });
+    await t.mutation(api.queue.importPlaintextSecret, {
+      secretRef: "agent-bridge.linkingSharedSecret",
+      plaintextValue: "abs_linking_secret",
+    });
     await t.mutation(api.queue.enqueueMessage, {
       conversationId: "telegram:chat:spawn-env",
       agentKey: "support-agent",
@@ -1186,6 +1190,9 @@ describe("component lib", () => {
     expect(machineCreateBody).not.toBeNull();
     expect(machineCreateBody!.config?.env?.OPENCLAW_SERVICE_ID).toBe("openclaw-prod");
     expect(machineCreateBody!.config?.env?.OPENCLAW_SERVICE_KEY).toBe("abs_live_bridge_key");
+    expect(machineCreateBody!.config?.env?.OPENCLAW_LINKING_SHARED_SECRET).toBe(
+      "abs_linking_secret",
+    );
   });
 
   test("scheduler should omit unresolved OpenClaw bridge env keys from spawned machines", async () => {
@@ -1279,6 +1286,9 @@ describe("component lib", () => {
     expect(machineCreateBody).not.toBeNull();
     expect(machineCreateBody!.config?.env?.OPENCLAW_SERVICE_ID).toBe("openclaw-prod");
     expect(machineCreateBody!.config?.env).not.toHaveProperty("OPENCLAW_SERVICE_KEY");
+    expect(machineCreateBody!.config?.env).not.toHaveProperty(
+      "OPENCLAW_LINKING_SHARED_SECRET",
+    );
   });
 
   test("worker assignment should prevent cross-conversation claims after completion", async () => {

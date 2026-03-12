@@ -311,11 +311,27 @@ Fallback env (worker-side only, used when hydration misses values):
 - `OPENCLAW_SERVICE_KEY` or `AGENT_BRIDGE_SERVICE_KEY`
 - `OPENCLAW_AGENT_APP` / `OPENCLAW_APP_KEY` / `AGENT_BRIDGE_APP_KEY`
 
-Fly.io practical note (recommended for strict bridge flow):
-- set `AGENT_BRIDGE_DEFAULT_APP_KEY`, `APP_BASE_URL_MAP_JSON`, `OPENCLAW_SERVICE_ID`,
-  and `OPENCLAW_SERVICE_KEY` directly in Fly app env/secrets (`fly secrets set` or `fly.toml [env]`).
-- keep these runtime values in Fly even when component secrets are configured, so workers
-  can always resolve strict `execute-on-behalf` calls without depending on secret hydration timing.
+### Required Fly.io / component secrets for agent-bridge
+
+When `agent-factory` is connected to `agent-bridge`, every spawned worker must receive these three environment variables for bridge execution and user linking to work correctly:
+
+| Env var | Component secret ref | Purpose |
+|---------|----------------------|---------|
+| `OPENCLAW_SERVICE_ID` | `agent-bridge.serviceId` | Service identity for bridge auth |
+| `OPENCLAW_SERVICE_KEY` | `agent-bridge.serviceKey` | Service key for bridge auth |
+| `OPENCLAW_LINKING_SHARED_SECRET` | `agent-bridge.linkingSharedSecret` | Shared secret for `execute-on-behalf` user linking |
+
+The scheduler forwards these from the component secret store into each machine's env at spawn time. If any is missing, the worker may fail bridge calls (e.g. `403 delegation_denied` when linking is required).
+
+Import all three into the component secret store:
+
+```sh
+npx convex run example:importSecret '{"secretRef": "agent-bridge.serviceId", "plaintextValue": "<your-service-id>"}'
+npx convex run example:importSecret '{"secretRef": "agent-bridge.serviceKey", "plaintextValue": "<your-service-key>"}'
+npx convex run example:importSecret '{"secretRef": "agent-bridge.linkingSharedSecret", "plaintextValue": "<your-linking-secret>"}'
+```
+
+Alternatively, set `OPENCLAW_SERVICE_ID`, `OPENCLAW_SERVICE_KEY`, and `OPENCLAW_LINKING_SHARED_SECRET` directly in Fly app env/secrets (`fly secrets set` or `fly.toml [env]`). Component secrets take precedence when the scheduler spawns machines.
 
 ### HTTP Routes
 

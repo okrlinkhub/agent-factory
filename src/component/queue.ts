@@ -81,6 +81,7 @@ const bridgeRuntimeConfigValidator = v.object({
 const workerSpawnOpenClawEnvValidator = v.object({
   OPENCLAW_SERVICE_ID: v.optional(v.string()),
   OPENCLAW_SERVICE_KEY: v.optional(v.string()),
+  OPENCLAW_LINKING_SHARED_SECRET: v.optional(v.string()),
 });
 
 const messageRuntimeConfigValidator = v.object({
@@ -106,6 +107,7 @@ const BRIDGE_SECRET_REFS = {
   baseUrlMapJson: "agent-bridge.baseUrlMapJson",
   serviceId: "agent-bridge.serviceId",
   appKey: "agent-bridge.appKey",
+  linkingSharedSecret: "agent-bridge.linkingSharedSecret",
 } as const;
 
 const RUNTIME_CONFIG_KEYS = {
@@ -408,6 +410,9 @@ export const getWorkerSpawnOpenClawEnv = internalQuery({
   handler: async (ctx) => {
     const [, globalServiceId] = await resolveFirstActiveSecretValue(ctx, [BRIDGE_SECRET_REFS.serviceId]);
     const [, globalServiceKey] = await resolveFirstActiveSecretValue(ctx, [BRIDGE_SECRET_REFS.serviceKey]);
+    const [, globalLinkingSharedSecret] = await resolveFirstActiveSecretValue(ctx, [
+      BRIDGE_SECRET_REFS.linkingSharedSecret,
+    ]);
     const bridgeProfiles = await ctx.db
       .query("agentProfiles")
       .withIndex("by_enabled", (q) => q.eq("enabled", true))
@@ -419,12 +424,16 @@ export const getWorkerSpawnOpenClawEnv = internalQuery({
     const env: {
       OPENCLAW_SERVICE_ID?: string;
       OPENCLAW_SERVICE_KEY?: string;
+      OPENCLAW_LINKING_SHARED_SECRET?: string;
     } = {};
     if (serviceId) {
       env.OPENCLAW_SERVICE_ID = serviceId;
     }
     if (serviceKey) {
       env.OPENCLAW_SERVICE_KEY = serviceKey;
+    }
+    if (globalLinkingSharedSecret) {
+      env.OPENCLAW_LINKING_SHARED_SECRET = globalLinkingSharedSecret;
     }
     return env;
   },
