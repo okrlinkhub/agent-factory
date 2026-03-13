@@ -832,6 +832,9 @@ async function reconcileWorkersAgainstProvider(
       const providerWorker = providerWorkersByMachineId.get(machineId);
       if (!providerWorker || providerWorker.status !== "active") {
         if (!isWorkerTerminal(worker.status)) {
+          console.warn(
+            `[scheduler] provider reconcile deactivating workerId=${worker.workerId} machineId=${machineId} dbStatus=${worker.status} providerStatus=${providerWorker?.status ?? "missing"} appName=${input.providerConfig.appName} scheduledShutdownAt=${worker.scheduledShutdownAt ?? "missing"} heartbeatAt=${worker.heartbeatAt} nowMs=${input.nowMs}`,
+          );
           if (isWorkerClaimable(worker.status)) {
             deactivated += 1;
             await transitionWorkerToDraining(
@@ -866,6 +869,9 @@ async function reconcileWorkersAgainstProvider(
       isWorkerClaimable(worker.status) &&
       worker.heartbeatAt <= input.staleHeartbeatCutoff
     ) {
+      console.warn(
+        `[scheduler] stale heartbeat deactivating workerId=${worker.workerId} machineId=${worker.machineId ?? "missing"} dbStatus=${worker.status} heartbeatAt=${worker.heartbeatAt} staleHeartbeatCutoff=${input.staleHeartbeatCutoff} appName=${input.providerConfig.appName} nowMs=${input.nowMs}`,
+      );
       deactivated += 1;
       await transitionWorkerToDraining(
         ctx,

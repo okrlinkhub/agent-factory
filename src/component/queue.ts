@@ -2023,12 +2023,35 @@ export const getWorkerControlState = query({
       .unique();
     const nowMs = Date.now();
     const staleHeartbeatCutoff = nowMs - DEFAULT_CONFIG.lease.staleAfterMs;
+    const shouldStop =
+      !worker ||
+      !isWorkerClaimable(worker.status) ||
+      worker.heartbeatAt <= staleHeartbeatCutoff ||
+      (worker.scheduledShutdownAt !== undefined && worker.scheduledShutdownAt <= nowMs);
+    if (shouldStop) {
+      const reasons: Array<string> = [];
+      if (!worker) {
+        reasons.push("missing_worker");
+      } else {
+        if (!isWorkerClaimable(worker.status)) {
+          reasons.push(`status_${worker.status}`);
+        }
+        if (worker.heartbeatAt <= staleHeartbeatCutoff) {
+          reasons.push("stale_heartbeat");
+        }
+        if (
+          worker.scheduledShutdownAt !== undefined &&
+          worker.scheduledShutdownAt <= nowMs
+        ) {
+          reasons.push("scheduled_shutdown_due");
+        }
+      }
+      console.warn(
+        `[queue] workerControlState stop workerId=${args.workerId} reasons=${reasons.join(",") || "unknown"} status=${worker?.status ?? "missing"} heartbeatAt=${worker?.heartbeatAt ?? "missing"} staleHeartbeatCutoff=${staleHeartbeatCutoff} scheduledShutdownAt=${worker?.scheduledShutdownAt ?? "missing"} machineId=${worker?.machineRef?.machineId ?? "missing"} appName=${worker?.machineRef?.appName ?? "missing"} nowMs=${nowMs}`,
+      );
+    }
     return {
-      shouldStop:
-        !worker ||
-        !isWorkerClaimable(worker.status) ||
-        worker.heartbeatAt <= staleHeartbeatCutoff ||
-        (worker.scheduledShutdownAt !== undefined && worker.scheduledShutdownAt <= nowMs),
+      shouldStop,
     };
   },
 });
