@@ -1905,6 +1905,98 @@ describe("component lib", () => {
     expect(worker?.status).toBe("stopped");
   });
 
+  test("provider transient machine states should remain active", async () => {
+    const t = initConvexTest();
+    const nowMs = Date.UTC(2026, 0, 1, 19, 15, 0);
+    vi.setSystemTime(nowMs);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/machines`) && method === "GET") {
+        return jsonResponse([
+          {
+            id: "machine-provider-creating-1",
+            name: "worker-provider-creating-1",
+            region: TEST_PROVIDER_CONFIG.region,
+            state: "creating",
+            config: { image: TEST_PROVIDER_CONFIG.image },
+          },
+        ]);
+      }
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/volumes`) && method === "GET") {
+        return jsonResponse([]);
+      }
+      throw new Error(`Unexpected fetch ${method} ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await t.mutation(internal.queue.upsertWorkerState, {
+      workerId: "worker-provider-creating-1",
+      provider: "fly",
+      status: "active",
+      load: 1,
+      nowMs,
+      machineId: "machine-provider-creating-1",
+      appName: TEST_PROVIDER_CONFIG.appName,
+      region: TEST_PROVIDER_CONFIG.region,
+    });
+
+    const reconcile = await t.action(api.scheduler.checkIdleShutdowns, {
+      nowMs,
+      flyApiToken: "fly-token",
+      providerConfig: TEST_PROVIDER_CONFIG,
+    });
+    expect(reconcile.stopped).toBe(0);
+
+    const workers = await t.query((internal.queue as any).listWorkersForScheduler, {});
+    const worker = workers.find(
+      (row: { workerId: string }) => row.workerId === "worker-provider-creating-1",
+    );
+    expect(worker?.status).toBe("active");
+  });
+
+  test("fresh missing provider workers should remain active during grace window", async () => {
+    const t = initConvexTest();
+    const nowMs = Date.UTC(2026, 0, 1, 19, 20, 0);
+    vi.setSystemTime(nowMs);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/machines`) && method === "GET") {
+        return jsonResponse([]);
+      }
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/volumes`) && method === "GET") {
+        return jsonResponse([]);
+      }
+      throw new Error(`Unexpected fetch ${method} ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await t.mutation(internal.queue.upsertWorkerState, {
+      workerId: "worker-provider-missing-fresh-1",
+      provider: "fly",
+      status: "active",
+      load: 0,
+      nowMs,
+      machineId: "machine-provider-missing-fresh-1",
+      appName: TEST_PROVIDER_CONFIG.appName,
+      region: TEST_PROVIDER_CONFIG.region,
+    });
+
+    const reconcile = await t.action(api.scheduler.checkIdleShutdowns, {
+      nowMs: nowMs + 15_000,
+      flyApiToken: "fly-token",
+      providerConfig: TEST_PROVIDER_CONFIG,
+    });
+    expect(reconcile.stopped).toBe(0);
+
+    const workers = await t.query((internal.queue as any).listWorkersForScheduler, {});
+    const worker = workers.find(
+      (row: { workerId: string }) => row.workerId === "worker-provider-missing-fresh-1",
+    );
+    expect(worker?.status).toBe("active");
+  });
+
   test("provider-unavailable active workers should enter draining before teardown", async () => {
     const t = initConvexTest();
     const nowMs = Date.UTC(2026, 0, 1, 19, 30, 0);
@@ -1987,6 +2079,80 @@ describe("component lib", () => {
       );
     });
     expect(teardownCalls).toHaveLength(0);
+  });
+
+  test("spawn failure should not leave preregistered worker active", async () => {
+    const t = initConvexTest();
+    const nowMs = Date.UTC(2026, 0, 1, 19, 35, 0);
+    vi.setSystemTime(nowMs);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/machines`) && method === "GET") {
+        return jsonResponse([]);
+      }
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/volumes`) && method === "GET") {
+        return jsonResponse([]);
+      }
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/volumes`) && method === "POST") {
+        return jsonResponse({
+          id: "vol-spawn-failure-1",
+          name: buildDedicatedVolumeName(TEST_PROVIDER_CONFIG.volumeName, "afw-spawn-failure"),
+          region: TEST_PROVIDER_CONFIG.region,
+        });
+      }
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/machines`) && method === "POST") {
+        throw new Error("simulated spawn failure");
+      }
+      throw new Error(`Unexpected fetch ${method} ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await t.mutation(api.queue.upsertAgentProfile, {
+      agentKey: "support-agent",
+      version: "1.0.0",
+      secretsRef: [],
+      enabled: true,
+    });
+    await t.mutation(api.queue.importPlaintextSecret, {
+      secretRef: "fly.apiToken",
+      plaintextValue: "fly-token",
+    });
+    await t.mutation(api.queue.importPlaintextSecret, {
+      secretRef: "convex.url",
+      plaintextValue: "https://example.convex.cloud",
+    });
+    await t.mutation(api.queue.enqueueMessage, {
+      conversationId: "telegram:chat:spawn-failure",
+      agentKey: "support-agent",
+      payload: {
+        provider: "telegram",
+        providerUserId: "u-spawn-failure",
+        messageText: "hello",
+      },
+      nowMs,
+    });
+
+    await expect(
+      t.action(api.scheduler.reconcileWorkerPool, {
+        nowMs,
+        flyApiToken: "fly-token",
+        convexUrl: "https://example.convex.cloud",
+        scalingPolicy: {
+          maxWorkers: 5,
+          queuePerWorkerTarget: 1,
+          spawnStep: 1,
+          idleTimeoutMs: 300_000,
+          reconcileIntervalMs: 15_000,
+        },
+        providerConfig: TEST_PROVIDER_CONFIG,
+      }),
+    ).rejects.toThrow("simulated spawn failure");
+
+    const workers = await t.query((internal.queue as any).listWorkersForScheduler, {});
+    const worker = workers.find((row: { workerId: string }) => row.workerId === `afw-${nowMs}-0`);
+    expect(worker?.status).toBe("stopped");
+    expect(worker?.machineId).toBeNull();
   });
 
   test("push jobs should dispatch scheduled messages with fallback user conversation id", async () => {

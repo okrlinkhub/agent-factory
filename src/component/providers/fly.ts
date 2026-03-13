@@ -25,6 +25,7 @@ export type ProviderWorker = {
   region?: string;
   image?: string;
   status: WorkerProviderStatus;
+  rawState?: string;
 };
 
 export interface WorkerProvider {
@@ -112,6 +113,7 @@ export class FlyMachinesProvider implements WorkerProvider {
       region: machine.region ?? input.region,
       image: machine.config?.image_ref ?? machine.config?.image ?? input.image,
       status: mapFlyStateToProviderStatus(machine.state),
+      rawState: machine.state,
     };
   }
 
@@ -156,6 +158,7 @@ export class FlyMachinesProvider implements WorkerProvider {
       region: machine.region,
       image: machine.config?.image_ref ?? machine.config?.image,
       status: mapFlyStateToProviderStatus(machine.state),
+      rawState: machine.state,
     }));
   }
 
@@ -327,12 +330,24 @@ export const deleteFlyVolumeManual = action({
 
 function mapFlyStateToProviderStatus(state: string | undefined): WorkerProviderStatus {
   switch (state) {
+    case "creating":
     case "created":
+    case "starting":
     case "started":
+    case "restarting":
+    case "updating":
+    case "replacing":
       return "active";
+    case "stopping":
+    case "suspending":
+    case "destroying":
+    case "launch_failed":
+    case "failed":
     case "stopped":
     case "destroyed":
     case "suspended":
+    case "replaced":
+    case "migrated":
       return "stopped";
     default:
       return "stopped";

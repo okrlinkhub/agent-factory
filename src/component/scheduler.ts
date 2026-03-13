@@ -75,6 +75,8 @@ type SchedulerWorkerRow = {
   region: string | null;
 };
 
+const PROVIDER_RECONCILE_GRACE_MS = 90_000;
+
 export const reconcileWorkerPool = action({
   args: reconcileWorkerPoolArgs,
   returns: reconcileWorkerPoolReturns,
@@ -346,23 +348,100 @@ async function runWorkerLifecycleCycle(
       );
       for (let index = 0; index < toSpawn; index += 1) {
         const workerId = `afw-${input.nowMs}-${index}`;
-        const created = await input.provider.spawnWorker({
+        await ctx.runMutation(internal.queue.upsertWorkerState, {
           workerId,
-          appName: input.providerConfig.appName,
-          image: input.providerConfig.image,
-          region: input.providerConfig.region,
-          volumeName: input.providerConfig.volumeName,
-          volumePath: input.providerConfig.volumePath,
-          volumeSizeGb: input.providerConfig.volumeSizeGb,
-          env: compactEnv({
-            ...DEFAULT_WORKER_RUNTIME_ENV,
-            ...forwardedOpenClawEnv,
-            CONVEX_URL: input.convexUrl ?? "",
-            WORKSPACE_ID: input.workspaceId ?? "default",
-            WORKER_ID: workerId,
-            WORKER_IDLE_TIMEOUT_MS: String(input.scaling.idleTimeoutMs),
-          }),
+          provider: input.providerConfig.kind,
+          status: "active",
+          load: 0,
+          nowMs: input.nowMs,
+          scheduledShutdownAt: input.nowMs + input.scaling.idleTimeoutMs,
         });
+        let created;
+        try {
+          created = await input.provider.spawnWorker({
+            workerId,
+            appName: input.providerConfig.appName,
+            image: input.providerConfig.image,
+            region: input.providerConfig.region,
+            volumeName: input.providerConfig.volumeName,
+            volumePath: input.providerConfig.volumePath,
+            volumeSizeGb: input.providerConfig.volumeSizeGb,
+            env: compactEnv({
+              ...DEFAULT_WORKER_RUNTIME_ENV,
+              ...forwardedOpenClawEnv,
+              CONVEX_URL: input.convexUrl ?? "",
+              WORKSPACE_ID: input.workspaceId ?? "default",
+              WORKER_ID: workerId,
+              WORKER_IDLE_TIMEOUT_MS: String(input.scaling.idleTimeoutMs),
+            }),
+          });
+        } catch (error) {
+          console.error(
+            `[scheduler] worker spawn failed after preregistration workerId=${workerId} appName=${input.providerConfig.appName} nowMs=${input.nowMs}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+          await transitionWorkerToDraining(
+            ctx,
+            {
+              workerId,
+              status: "active",
+              load: 0,
+              heartbeatAt: input.nowMs,
+              lastClaimAt: null,
+              scheduledShutdownAt: input.nowMs,
+              stoppedAt: null,
+              lastSnapshotId: null,
+              assignment: null,
+              machineId: null,
+              appName: input.providerConfig.appName,
+              region: input.providerConfig.region,
+            },
+            input.providerConfig,
+            input.nowMs,
+            false,
+          );
+          await transitionWorkerToStopping(
+            ctx,
+            {
+              workerId,
+              status: "draining",
+              load: 0,
+              heartbeatAt: input.nowMs,
+              lastClaimAt: null,
+              scheduledShutdownAt: input.nowMs,
+              stoppedAt: null,
+              lastSnapshotId: null,
+              assignment: null,
+              machineId: null,
+              appName: input.providerConfig.appName,
+              region: input.providerConfig.region,
+            },
+            input.providerConfig,
+            input.nowMs,
+            false,
+          );
+          await transitionWorkerToStopped(
+            ctx,
+            {
+              workerId,
+              status: "stopping",
+              load: 0,
+              heartbeatAt: input.nowMs,
+              lastClaimAt: null,
+              scheduledShutdownAt: input.nowMs,
+              stoppedAt: input.nowMs,
+              lastSnapshotId: null,
+              assignment: null,
+              machineId: null,
+              appName: input.providerConfig.appName,
+              region: input.providerConfig.region,
+            },
+            input.providerConfig,
+            input.nowMs,
+          );
+          throw error;
+        }
         await ctx.runMutation(internal.queue.upsertWorkerState, {
           workerId: created.workerId,
           provider: input.providerConfig.kind,
@@ -831,9 +910,16 @@ async function reconcileWorkersAgainstProvider(
     if (machineId) {
       const providerWorker = providerWorkersByMachineId.get(machineId);
       if (!providerWorker || providerWorker.status !== "active") {
+        const withinGraceWindow = isWithinProviderReconcileGraceWindow(worker, input.nowMs);
+        if (withinGraceWindow && (!providerWorker || isFlyTransientState(providerWorker.rawState))) {
+          console.warn(
+            `[scheduler] provider reconcile grace workerId=${worker.workerId} machineId=${machineId} dbStatus=${worker.status} providerStatus=${providerWorker?.status ?? "missing"} rawFlyState=${providerWorker?.rawState ?? "missing"} appName=${input.providerConfig.appName} heartbeatAt=${worker.heartbeatAt} nowMs=${input.nowMs} graceMs=${PROVIDER_RECONCILE_GRACE_MS}`,
+          );
+          continue;
+        }
         if (!isWorkerTerminal(worker.status)) {
           console.warn(
-            `[scheduler] provider reconcile deactivating workerId=${worker.workerId} machineId=${machineId} dbStatus=${worker.status} providerStatus=${providerWorker?.status ?? "missing"} appName=${input.providerConfig.appName} scheduledShutdownAt=${worker.scheduledShutdownAt ?? "missing"} heartbeatAt=${worker.heartbeatAt} nowMs=${input.nowMs}`,
+            `[scheduler] provider reconcile deactivating workerId=${worker.workerId} machineId=${machineId} dbStatus=${worker.status} providerStatus=${providerWorker?.status ?? "missing"} rawFlyState=${providerWorker?.rawState ?? "missing"} appName=${input.providerConfig.appName} scheduledShutdownAt=${worker.scheduledShutdownAt ?? "missing"} heartbeatAt=${worker.heartbeatAt} nowMs=${input.nowMs}`,
           );
           if (isWorkerClaimable(worker.status)) {
             deactivated += 1;
@@ -908,6 +994,22 @@ function warnOnMixedProviderImages(
       `[scheduler] target image ${providerConfig.image} is not active yet for app=${providerConfig.appName}`,
     );
   }
+}
+
+function isWithinProviderReconcileGraceWindow(worker: SchedulerWorkerRow, nowMs: number) {
+  return nowMs - worker.heartbeatAt <= PROVIDER_RECONCILE_GRACE_MS;
+}
+
+function isFlyTransientState(rawState: string | undefined) {
+  return new Set([
+    "creating",
+    "created",
+    "starting",
+    "started",
+    "restarting",
+    "updating",
+    "replacing",
+  ]).has(rawState ?? "");
 }
 
 function isSafeMissingMachineError(error: unknown): boolean {
