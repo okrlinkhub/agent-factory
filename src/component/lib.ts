@@ -19,6 +19,13 @@ export {
   getHydrationBundleForClaimedJob as getHydrationBundle,
   getQueueStats as queueStats,
   getWorkerStats as workerStats,
+  listQueueItemsForConversation,
+  listQueueItemsForUserAgent,
+  getConversationViewForUserAgent,
+  sendMessageToUserAgent,
+  listSnapshotsForConversation,
+  listSnapshotsForUserAgent,
+  getLatestSnapshotForUserAgent,
 } from "./queue.js";
 
 export {
@@ -33,10 +40,23 @@ export {
   resolveAgentForUser,
   resolveAgentForTelegram,
   getUserAgentBinding,
+  listUserAgents,
+  getUserAgent,
+  getActiveUserAgent,
+  getUserAgentsOverview,
   configureTelegramWebhook,
   createPairingCode,
   consumePairingCode,
   getPairingCodeStatus,
+  createUserAgentPairing,
+  getUserAgentPairingStatus,
+  importTelegramTokenForAgent,
+  getUserAgentOnboardingState,
+  getRequiredSecretRefs,
+  getProviderOperationalReadiness,
+  getTelegramAgentReadiness,
+  getAgentOperationalReadiness,
+  getWebhookReadiness,
 } from "./identity.js";
 
 export {
@@ -54,4 +74,13 @@ export {
   dispatchDuePushJobs,
   sendBroadcastToAllActiveAgents,
   listPushDispatchesByJob,
+  listPushJobsForAgent,
+  createPushJobFromTemplateForAgent,
+  createPushJobCustomForAgent,
+  updatePushJobForAgent,
+  triggerPushJobNowForAgent,
+  listPushDispatchesForAgent,
+  getUserAgentPushStats,
+  getUserAgentConversationStats,
+  getUserAgentUsageStats,
 } from "./pushing.js";

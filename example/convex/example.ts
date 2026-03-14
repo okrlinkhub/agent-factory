@@ -190,10 +190,23 @@ export const {
   revokeUserAgentBinding,
   myAgentKey,
   getUserAgentBinding,
+  listUserAgents,
+  getUserAgent,
+  getActiveUserAgent,
+  getUserAgentsOverview,
   resolveAgentForTelegram,
   createPairingCode,
+  createUserAgentPairing,
   consumePairingCode,
   getPairingCodeStatus,
+  getUserAgentPairingStatus,
+  importTelegramTokenForAgent,
+  getUserAgentOnboardingState,
+  getRequiredSecretRefs,
+  getProviderOperationalReadiness,
+  getTelegramAgentReadiness,
+  getAgentOperationalReadiness,
+  getWebhookReadiness,
   createPushTemplate,
   updatePushTemplate,
   deletePushTemplate,
@@ -204,10 +217,26 @@ export const {
   deletePushJob,
   setPushJobEnabled,
   listPushJobsForUser,
+  listQueueItemsForConversation,
+  listQueueItemsForUserAgent,
+  getConversationViewForUserAgent,
+  sendMessageToUserAgent,
+  listSnapshotsForConversation,
+  listSnapshotsForUserAgent,
+  getLatestSnapshotForUserAgent,
   triggerPushJobNow,
+  listPushJobsForAgent,
+  createPushJobFromTemplateForAgent,
+  createPushJobCustomForAgent,
+  updatePushJobForAgent,
+  triggerPushJobNowForAgent,
   dispatchDuePushJobs,
   sendBroadcastToAllActiveAgents,
   listPushDispatchesByJob,
+  listPushDispatchesForAgent,
+  getUserAgentPushStats,
+  getUserAgentConversationStats,
+  getUserAgentUsageStats,
   globalSkillsDeploy,
   globalSkillsList,
   globalSkillsSetStatus,
@@ -226,6 +255,44 @@ export const {
 export const reconcileWorkers = startWorkers;
 export const importPairingSecret = importSecret;
 export const pairUserToAgent = bindUserAgent;
+
+export const getMyUserAgentsOverviewExample = query({
+  args: {},
+  handler: async (ctx) => {
+    const consumerUserId = await getAuthUserId(ctx);
+    return await ctx.runQuery(components.agentFactory.lib.getUserAgentsOverview, {
+      consumerUserId,
+    });
+  },
+});
+
+export const getMyAgentConversationExample = query({
+  args: {
+    agentKey: v.string(),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const consumerUserId = await getAuthUserId(ctx);
+    return await ctx.runQuery(components.agentFactory.lib.getConversationViewForUserAgent, {
+      consumerUserId,
+      agentKey: args.agentKey,
+      limit: args.limit,
+    });
+  },
+});
+
+export const getMyAgentUsageStatsExample = query({
+  args: {
+    agentKey: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const consumerUserId = await getAuthUserId(ctx);
+    return await ctx.runQuery(components.agentFactory.lib.getUserAgentUsageStats, {
+      consumerUserId,
+      agentKey: args.agentKey,
+    });
+  },
+});
 
 async function getAuthUserId(ctx: { auth: Auth }) {
   return (await ctx.auth.getUserIdentity())?.subject ?? "anonymous";

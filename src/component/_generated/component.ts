@@ -109,6 +109,66 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         },
         Name
       >;
+      createUserAgentPairing: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          agentKey: string;
+          consumerUserId: string;
+          nowMs?: number;
+          ttlMs?: number;
+        },
+        {
+          deepLink: null | string;
+          pairing: {
+            agentKey: string;
+            code: string;
+            consumerUserId: string;
+            createdAt: number;
+            expiresAt: number;
+            status: "pending" | "used" | "expired";
+            telegramChatId: null | string;
+            telegramUserId: null | string;
+            usedAt: null | number;
+          };
+        },
+        Name
+      >;
+      getActiveUserAgent: FunctionReference<
+        "query",
+        "internal",
+        { consumerUserId: string; nowMs?: number },
+        null | {
+          agentKey: string;
+          bindingStatus: null | "active" | "revoked";
+          canChat: boolean;
+          canCreateNewAgent: boolean;
+          canDisable: boolean;
+          canManagePushJobs: boolean;
+          consumerUserId: string;
+          conversationId: null | string;
+          displayName: null | string;
+          pairingStatus: null | "pending" | "used" | "expired";
+          status: "draft" | "pairing" | "active" | "disabled" | "failed";
+          telegramUsername: null | string;
+          version: null | string;
+        },
+        Name
+      >;
+      getAgentOperationalReadiness: FunctionReference<
+        "query",
+        "internal",
+        { agentKey: string; consumerUserId: string; nowMs?: number },
+        {
+          hasTelegramToken: boolean;
+          issues: Array<string>;
+          missingSecrets: Array<string>;
+          providerRuntimeConfigPresent: boolean;
+          webhookReady: boolean;
+          workerRuntimeConfigPresent: boolean;
+        },
+        Name
+      >;
       getPairingCodeStatus: FunctionReference<
         "query",
         "internal",
@@ -123,6 +183,59 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           telegramChatId: null | string;
           telegramUserId: null | string;
           usedAt: null | number;
+        },
+        Name
+      >;
+      getProviderOperationalReadiness: FunctionReference<
+        "query",
+        "internal",
+        {},
+        {
+          issues: Array<string>;
+          providerRuntimeConfigPresent: boolean;
+          workerRuntimeConfigPresent: boolean;
+        },
+        Name
+      >;
+      getRequiredSecretRefs: FunctionReference<
+        "query",
+        "internal",
+        { agentKey?: string },
+        { agentKey: null | string; secretRefs: Array<string> },
+        Name
+      >;
+      getTelegramAgentReadiness: FunctionReference<
+        "query",
+        "internal",
+        { agentKey: string; consumerUserId: string; nowMs?: number },
+        {
+          hasTelegramToken: boolean;
+          issues: Array<string>;
+          missingSecrets: Array<string>;
+          providerRuntimeConfigPresent: boolean;
+          webhookReady: boolean;
+          workerRuntimeConfigPresent: boolean;
+        },
+        Name
+      >;
+      getUserAgent: FunctionReference<
+        "query",
+        "internal",
+        { agentKey: string; consumerUserId: string; nowMs?: number },
+        null | {
+          agentKey: string;
+          bindingStatus: null | "active" | "revoked";
+          canChat: boolean;
+          canCreateNewAgent: boolean;
+          canDisable: boolean;
+          canManagePushJobs: boolean;
+          consumerUserId: string;
+          conversationId: null | string;
+          displayName: null | string;
+          pairingStatus: null | "pending" | "used" | "expired";
+          status: "draft" | "pairing" | "active" | "disabled" | "failed";
+          telegramUsername: null | string;
+          version: null | string;
         },
         Name
       >;
@@ -141,6 +254,118 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           telegramChatId: null | string;
           telegramUserId: null | string;
         },
+        Name
+      >;
+      getUserAgentOnboardingState: FunctionReference<
+        "query",
+        "internal",
+        { agentKey: string; consumerUserId: string; nowMs?: number },
+        {
+          agentKey: string;
+          nextAction:
+            | "import_token"
+            | "configure_webhook"
+            | "create_pairing"
+            | "complete_pairing"
+            | "ready";
+          pairingCode: null | string;
+          pairingDeepLink: null | string;
+          pairingStatus: null | "pending" | "used" | "expired";
+          telegramUsername: null | string;
+          tokenImported: boolean;
+          tokenSecretRef: null | string;
+          webhookReady: boolean;
+        },
+        Name
+      >;
+      getUserAgentPairingStatus: FunctionReference<
+        "query",
+        "internal",
+        { agentKey: string; consumerUserId: string; nowMs?: number },
+        null | {
+          agentKey: string;
+          code: string;
+          consumerUserId: string;
+          createdAt: number;
+          expiresAt: number;
+          status: "pending" | "used" | "expired";
+          telegramChatId: null | string;
+          telegramUserId: null | string;
+          usedAt: null | number;
+        },
+        Name
+      >;
+      getUserAgentsOverview: FunctionReference<
+        "query",
+        "internal",
+        { consumerUserId: string; nowMs?: number },
+        {
+          activeAgentKey: null | string;
+          agents: Array<{
+            agentKey: string;
+            bindingStatus: null | "active" | "revoked";
+            canChat: boolean;
+            canCreateNewAgent: boolean;
+            canDisable: boolean;
+            canManagePushJobs: boolean;
+            consumerUserId: string;
+            conversationId: null | string;
+            displayName: null | string;
+            pairingStatus: null | "pending" | "used" | "expired";
+            status: "draft" | "pairing" | "active" | "disabled" | "failed";
+            telegramUsername: null | string;
+            version: null | string;
+          }>;
+          canCreateNewAgent: boolean;
+        },
+        Name
+      >;
+      getWebhookReadiness: FunctionReference<
+        "action",
+        "internal",
+        { agentKey: string },
+        {
+          agentKey: string;
+          currentUrl: null | string;
+          lastErrorDate: null | number;
+          lastErrorMessage: null | string;
+          pendingUpdateCount: number;
+          secretRef: null | string;
+          webhookReady: boolean;
+        },
+        Name
+      >;
+      importTelegramTokenForAgent: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          agentKey: string;
+          consumerUserId: string;
+          metadata?: Record<string, string>;
+          plaintextValue: string;
+        },
+        { secretId: string; secretRef: string; version: number },
+        Name
+      >;
+      listUserAgents: FunctionReference<
+        "query",
+        "internal",
+        { consumerUserId: string; includeDisabled?: boolean; nowMs?: number },
+        Array<{
+          agentKey: string;
+          bindingStatus: null | "active" | "revoked";
+          canChat: boolean;
+          canCreateNewAgent: boolean;
+          canDisable: boolean;
+          canManagePushJobs: boolean;
+          consumerUserId: string;
+          conversationId: null | string;
+          displayName: null | string;
+          pairingStatus: null | "pending" | "used" | "expired";
+          status: "draft" | "pairing" | "active" | "disabled" | "failed";
+          telegramUsername: null | string;
+          version: null | string;
+        }>,
         Name
       >;
       resolveAgentForTelegram: FunctionReference<
@@ -383,10 +608,52 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         string,
         Name
       >;
+      createPushJobCustomForAgent: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          agentKey: string;
+          companyId: string;
+          consumerUserId: string;
+          enabled?: boolean;
+          nowMs?: number;
+          periodicity: "manual" | "daily" | "weekly" | "monthly";
+          schedule:
+            | { kind: "manual" }
+            | { kind: "daily"; time: string }
+            | { kind: "weekly"; time: string; weekday: number }
+            | { dayOfMonth: number | "last"; kind: "monthly"; time: string };
+          text: string;
+          timezone: string;
+          title: string;
+        },
+        string,
+        Name
+      >;
       createPushJobFromTemplate: FunctionReference<
         "mutation",
         "internal",
         {
+          companyId: string;
+          consumerUserId: string;
+          enabled?: boolean;
+          nowMs?: number;
+          schedule?:
+            | { kind: "manual" }
+            | { kind: "daily"; time: string }
+            | { kind: "weekly"; time: string; weekday: number }
+            | { dayOfMonth: number | "last"; kind: "monthly"; time: string };
+          templateId: string;
+          timezone: string;
+        },
+        string,
+        Name
+      >;
+      createPushJobFromTemplateForAgent: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          agentKey: string;
           companyId: string;
           consumerUserId: string;
           enabled?: boolean;
@@ -421,6 +688,31 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           title: string;
         },
         string,
+        Name
+      >;
+      createUserAgentPairing: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          agentKey: string;
+          consumerUserId: string;
+          nowMs?: number;
+          ttlMs?: number;
+        },
+        {
+          deepLink: null | string;
+          pairing: {
+            agentKey: string;
+            code: string;
+            consumerUserId: string;
+            createdAt: number;
+            expiresAt: number;
+            status: "pending" | "used" | "expired";
+            telegramChatId: null | string;
+            telegramUserId: null | string;
+            usedAt: null | number;
+          };
+        },
         Name
       >;
       deleteFlyVolume: FunctionReference<
@@ -530,6 +822,84 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         { uploadUrl: string },
         Name
       >;
+      getActiveUserAgent: FunctionReference<
+        "query",
+        "internal",
+        { consumerUserId: string; nowMs?: number },
+        null | {
+          agentKey: string;
+          bindingStatus: null | "active" | "revoked";
+          canChat: boolean;
+          canCreateNewAgent: boolean;
+          canDisable: boolean;
+          canManagePushJobs: boolean;
+          consumerUserId: string;
+          conversationId: null | string;
+          displayName: null | string;
+          pairingStatus: null | "pending" | "used" | "expired";
+          status: "draft" | "pairing" | "active" | "disabled" | "failed";
+          telegramUsername: null | string;
+          version: null | string;
+        },
+        Name
+      >;
+      getAgentOperationalReadiness: FunctionReference<
+        "query",
+        "internal",
+        { agentKey: string; consumerUserId: string; nowMs?: number },
+        {
+          hasTelegramToken: boolean;
+          issues: Array<string>;
+          missingSecrets: Array<string>;
+          providerRuntimeConfigPresent: boolean;
+          webhookReady: boolean;
+          workerRuntimeConfigPresent: boolean;
+        },
+        Name
+      >;
+      getConversationViewForUserAgent: FunctionReference<
+        "query",
+        "internal",
+        { agentKey: string; consumerUserId: string; limit?: number },
+        {
+          contextHistory: Array<{
+            at: number;
+            content: string;
+            role: "system" | "user" | "assistant" | "tool";
+          }>;
+          conversationId: string;
+          hasQueuedJobs: boolean;
+          lastAssistantMessageAt: null | number;
+          lastUserMessageAt: null | number;
+          latestMessageId: null | string;
+          pendingToolCalls: Array<{
+            callId: string;
+            status: "pending" | "running" | "done" | "failed";
+            toolName: string;
+          }>;
+          queueItems: Array<{
+            _creationTime: number;
+            _id: string;
+            agentKey: string;
+            attempts: number;
+            conversationId: string;
+            lastError: null | string;
+            maxAttempts: number;
+            payload: {
+              externalMessageId?: string;
+              messageText: string;
+              metadata?: Record<string, string>;
+              provider: string;
+              providerUserId: string;
+              rawUpdateJson?: string;
+            };
+            priority: number;
+            scheduledFor: number;
+            status: "queued" | "processing" | "done" | "failed" | "dead_letter";
+          }>;
+        },
+        Name
+      >;
       getHydrationBundle: FunctionReference<
         "query",
         "internal",
@@ -570,6 +940,21 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         },
         Name
       >;
+      getLatestSnapshotForUserAgent: FunctionReference<
+        "query",
+        "internal",
+        { agentKey: string; consumerUserId: string; nowMs?: number },
+        null | {
+          conversationId: null | string;
+          createdAt: number;
+          downloadUrl: null | string;
+          sha256: null | string;
+          sizeBytes: null | number;
+          snapshotId: string;
+          status: "uploading" | "ready" | "failed" | "expired";
+        },
+        Name
+      >;
       getPairingCodeStatus: FunctionReference<
         "query",
         "internal",
@@ -587,11 +972,64 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         },
         Name
       >;
+      getProviderOperationalReadiness: FunctionReference<
+        "query",
+        "internal",
+        {},
+        {
+          issues: Array<string>;
+          providerRuntimeConfigPresent: boolean;
+          workerRuntimeConfigPresent: boolean;
+        },
+        Name
+      >;
+      getRequiredSecretRefs: FunctionReference<
+        "query",
+        "internal",
+        { agentKey?: string },
+        { agentKey: null | string; secretRefs: Array<string> },
+        Name
+      >;
       getStorageFileUrl: FunctionReference<
         "query",
         "internal",
         { storageId: string },
         null | string,
+        Name
+      >;
+      getTelegramAgentReadiness: FunctionReference<
+        "query",
+        "internal",
+        { agentKey: string; consumerUserId: string; nowMs?: number },
+        {
+          hasTelegramToken: boolean;
+          issues: Array<string>;
+          missingSecrets: Array<string>;
+          providerRuntimeConfigPresent: boolean;
+          webhookReady: boolean;
+          workerRuntimeConfigPresent: boolean;
+        },
+        Name
+      >;
+      getUserAgent: FunctionReference<
+        "query",
+        "internal",
+        { agentKey: string; consumerUserId: string; nowMs?: number },
+        null | {
+          agentKey: string;
+          bindingStatus: null | "active" | "revoked";
+          canChat: boolean;
+          canCreateNewAgent: boolean;
+          canDisable: boolean;
+          canManagePushJobs: boolean;
+          consumerUserId: string;
+          conversationId: null | string;
+          displayName: null | string;
+          pairingStatus: null | "pending" | "used" | "expired";
+          status: "draft" | "pairing" | "active" | "disabled" | "failed";
+          telegramUsername: null | string;
+          version: null | string;
+        },
         Name
       >;
       getUserAgentBinding: FunctionReference<
@@ -608,6 +1046,123 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           status: "active" | "revoked";
           telegramChatId: null | string;
           telegramUserId: null | string;
+        },
+        Name
+      >;
+      getUserAgentConversationStats: FunctionReference<
+        "query",
+        "internal",
+        { agentKey: string; consumerUserId: string },
+        {
+          contextMessages: number;
+          failedMessages: number;
+          queuedMessages: number;
+        },
+        Name
+      >;
+      getUserAgentOnboardingState: FunctionReference<
+        "query",
+        "internal",
+        { agentKey: string; consumerUserId: string; nowMs?: number },
+        {
+          agentKey: string;
+          nextAction:
+            | "import_token"
+            | "configure_webhook"
+            | "create_pairing"
+            | "complete_pairing"
+            | "ready";
+          pairingCode: null | string;
+          pairingDeepLink: null | string;
+          pairingStatus: null | "pending" | "used" | "expired";
+          telegramUsername: null | string;
+          tokenImported: boolean;
+          tokenSecretRef: null | string;
+          webhookReady: boolean;
+        },
+        Name
+      >;
+      getUserAgentPairingStatus: FunctionReference<
+        "query",
+        "internal",
+        { agentKey: string; consumerUserId: string; nowMs?: number },
+        null | {
+          agentKey: string;
+          code: string;
+          consumerUserId: string;
+          createdAt: number;
+          expiresAt: number;
+          status: "pending" | "used" | "expired";
+          telegramChatId: null | string;
+          telegramUserId: null | string;
+          usedAt: null | number;
+        },
+        Name
+      >;
+      getUserAgentPushStats: FunctionReference<
+        "query",
+        "internal",
+        { agentKey: string; consumerUserId: string },
+        {
+          activePushJobs: number;
+          latestDispatchAt: null | number;
+          totalDispatches: number;
+          totalPushJobs: number;
+        },
+        Name
+      >;
+      getUserAgentsOverview: FunctionReference<
+        "query",
+        "internal",
+        { consumerUserId: string; nowMs?: number },
+        {
+          activeAgentKey: null | string;
+          agents: Array<{
+            agentKey: string;
+            bindingStatus: null | "active" | "revoked";
+            canChat: boolean;
+            canCreateNewAgent: boolean;
+            canDisable: boolean;
+            canManagePushJobs: boolean;
+            consumerUserId: string;
+            conversationId: null | string;
+            displayName: null | string;
+            pairingStatus: null | "pending" | "used" | "expired";
+            status: "draft" | "pairing" | "active" | "disabled" | "failed";
+            telegramUsername: null | string;
+            version: null | string;
+          }>;
+          canCreateNewAgent: boolean;
+        },
+        Name
+      >;
+      getUserAgentUsageStats: FunctionReference<
+        "query",
+        "internal",
+        { agentKey: string; consumerUserId: string },
+        {
+          activePushJobs: number;
+          contextMessages: number;
+          failedMessages: number;
+          latestDispatchAt: null | number;
+          queuedMessages: number;
+          totalDispatches: number;
+          totalPushJobs: number;
+        },
+        Name
+      >;
+      getWebhookReadiness: FunctionReference<
+        "action",
+        "internal",
+        { agentKey: string },
+        {
+          agentKey: string;
+          currentUrl: null | string;
+          lastErrorDate: null | number;
+          lastErrorMessage: null | string;
+          pendingUpdateCount: number;
+          secretRef: null | string;
+          webhookReady: boolean;
         },
         Name
       >;
@@ -634,6 +1189,18 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         { secretId: string; secretRef: string; version: number },
         Name
       >;
+      importTelegramTokenForAgent: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          agentKey: string;
+          consumerUserId: string;
+          metadata?: Record<string, string>;
+          plaintextValue: string;
+        },
+        { secretId: string; secretRef: string; version: number },
+        Name
+      >;
       listPushDispatchesByJob: FunctionReference<
         "query",
         "internal",
@@ -645,6 +1212,49 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           runKey: string;
           scheduledFor: number;
           status: "enqueued" | "skipped" | "failed";
+        }>,
+        Name
+      >;
+      listPushDispatchesForAgent: FunctionReference<
+        "query",
+        "internal",
+        { agentKey: string; consumerUserId: string; limit?: number },
+        Array<{
+          _id: string;
+          createdAt: number;
+          error: null | string;
+          jobId: string;
+          runKey: string;
+          scheduledFor: number;
+          status: "enqueued" | "skipped" | "failed";
+        }>,
+        Name
+      >;
+      listPushJobsForAgent: FunctionReference<
+        "query",
+        "internal",
+        { agentKey: string; consumerUserId: string; includeDisabled?: boolean },
+        Array<{
+          _id: string;
+          agentKey: null | string;
+          companyId: string;
+          consumerUserId: string;
+          createdAt: number;
+          enabled: boolean;
+          lastRunAt: null | number;
+          lastRunKey: null | string;
+          nextRunAt: null | number;
+          periodicity: "manual" | "daily" | "weekly" | "monthly";
+          schedule:
+            | { kind: "manual" }
+            | { kind: "daily"; time: string }
+            | { kind: "weekly"; time: string; weekday: number }
+            | { dayOfMonth: number | "last"; kind: "monthly"; time: string };
+          sourceTemplateId: null | string;
+          text: string;
+          timezone: string;
+          title: string;
+          updatedAt: number;
         }>,
         Name
       >;
@@ -697,6 +1307,121 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           title: string;
           updatedAt: number;
           updatedBy: string;
+        }>,
+        Name
+      >;
+      listQueueItemsForConversation: FunctionReference<
+        "query",
+        "internal",
+        { conversationId: string; limit?: number },
+        Array<{
+          _creationTime: number;
+          _id: string;
+          agentKey: string;
+          attempts: number;
+          conversationId: string;
+          lastError: null | string;
+          maxAttempts: number;
+          payload: {
+            externalMessageId?: string;
+            messageText: string;
+            metadata?: Record<string, string>;
+            provider: string;
+            providerUserId: string;
+            rawUpdateJson?: string;
+          };
+          priority: number;
+          scheduledFor: number;
+          status: "queued" | "processing" | "done" | "failed" | "dead_letter";
+        }>,
+        Name
+      >;
+      listQueueItemsForUserAgent: FunctionReference<
+        "query",
+        "internal",
+        {
+          agentKey: string;
+          consumerUserId: string;
+          limit?: number;
+          statuses?: Array<
+            "queued" | "processing" | "done" | "failed" | "dead_letter"
+          >;
+        },
+        Array<{
+          _creationTime: number;
+          _id: string;
+          agentKey: string;
+          attempts: number;
+          conversationId: string;
+          lastError: null | string;
+          maxAttempts: number;
+          payload: {
+            externalMessageId?: string;
+            messageText: string;
+            metadata?: Record<string, string>;
+            provider: string;
+            providerUserId: string;
+            rawUpdateJson?: string;
+          };
+          priority: number;
+          scheduledFor: number;
+          status: "queued" | "processing" | "done" | "failed" | "dead_letter";
+        }>,
+        Name
+      >;
+      listSnapshotsForConversation: FunctionReference<
+        "query",
+        "internal",
+        { conversationId: string; limit?: number; nowMs?: number },
+        Array<{
+          conversationId: null | string;
+          createdAt: number;
+          downloadUrl: null | string;
+          sha256: null | string;
+          sizeBytes: null | number;
+          snapshotId: string;
+          status: "uploading" | "ready" | "failed" | "expired";
+        }>,
+        Name
+      >;
+      listSnapshotsForUserAgent: FunctionReference<
+        "query",
+        "internal",
+        {
+          agentKey: string;
+          consumerUserId: string;
+          limit?: number;
+          nowMs?: number;
+        },
+        Array<{
+          conversationId: null | string;
+          createdAt: number;
+          downloadUrl: null | string;
+          sha256: null | string;
+          sizeBytes: null | number;
+          snapshotId: string;
+          status: "uploading" | "ready" | "failed" | "expired";
+        }>,
+        Name
+      >;
+      listUserAgents: FunctionReference<
+        "query",
+        "internal",
+        { consumerUserId: string; includeDisabled?: boolean; nowMs?: number },
+        Array<{
+          agentKey: string;
+          bindingStatus: null | "active" | "revoked";
+          canChat: boolean;
+          canCreateNewAgent: boolean;
+          canDisable: boolean;
+          canManagePushJobs: boolean;
+          consumerUserId: string;
+          conversationId: null | string;
+          displayName: null | string;
+          pairingStatus: null | "pending" | "used" | "expired";
+          status: "draft" | "pairing" | "active" | "disabled" | "failed";
+          telegramUsername: null | string;
+          version: null | string;
         }>,
         Name
       >;
@@ -826,6 +1551,29 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         },
         Name
       >;
+      sendMessageToUserAgent: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          agentKey: string;
+          consumerUserId: string;
+          content: string;
+          metadata?: Record<string, string>;
+          nowMs?: number;
+          providerConfig?: {
+            appName: string;
+            image: string;
+            kind: "fly" | "runpod" | "ecs";
+            organizationSlug: string;
+            region: string;
+            volumeName: string;
+            volumePath: string;
+            volumeSizeGb: number;
+          };
+        },
+        string,
+        Name
+      >;
       setMessageRuntimeConfig: FunctionReference<
         "mutation",
         "internal",
@@ -879,10 +1627,54 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         { enqueuedMessageId: string; runKey: string },
         Name
       >;
+      triggerPushJobNowForAgent: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          agentKey: string;
+          consumerUserId: string;
+          jobId: string;
+          nowMs?: number;
+          providerConfig?: {
+            appName: string;
+            image: string;
+            kind: "fly" | "runpod" | "ecs";
+            organizationSlug: string;
+            region: string;
+            volumeName: string;
+            volumePath: string;
+            volumeSizeGb: number;
+          };
+        },
+        { enqueuedMessageId: string; runKey: string },
+        Name
+      >;
       updatePushJob: FunctionReference<
         "mutation",
         "internal",
         {
+          enabled?: boolean;
+          jobId: string;
+          nowMs?: number;
+          periodicity?: "manual" | "daily" | "weekly" | "monthly";
+          schedule?:
+            | { kind: "manual" }
+            | { kind: "daily"; time: string }
+            | { kind: "weekly"; time: string; weekday: number }
+            | { dayOfMonth: number | "last"; kind: "monthly"; time: string };
+          text?: string;
+          timezone?: string;
+          title?: string;
+        },
+        boolean,
+        Name
+      >;
+      updatePushJobForAgent: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          agentKey: string;
+          consumerUserId: string;
           enabled?: boolean;
           jobId: string;
           nowMs?: number;
@@ -971,10 +1763,52 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         string,
         Name
       >;
+      createPushJobCustomForAgent: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          agentKey: string;
+          companyId: string;
+          consumerUserId: string;
+          enabled?: boolean;
+          nowMs?: number;
+          periodicity: "manual" | "daily" | "weekly" | "monthly";
+          schedule:
+            | { kind: "manual" }
+            | { kind: "daily"; time: string }
+            | { kind: "weekly"; time: string; weekday: number }
+            | { dayOfMonth: number | "last"; kind: "monthly"; time: string };
+          text: string;
+          timezone: string;
+          title: string;
+        },
+        string,
+        Name
+      >;
       createPushJobFromTemplate: FunctionReference<
         "mutation",
         "internal",
         {
+          companyId: string;
+          consumerUserId: string;
+          enabled?: boolean;
+          nowMs?: number;
+          schedule?:
+            | { kind: "manual" }
+            | { kind: "daily"; time: string }
+            | { kind: "weekly"; time: string; weekday: number }
+            | { dayOfMonth: number | "last"; kind: "monthly"; time: string };
+          templateId: string;
+          timezone: string;
+        },
+        string,
+        Name
+      >;
+      createPushJobFromTemplateForAgent: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          agentKey: string;
           companyId: string;
           consumerUserId: string;
           enabled?: boolean;
@@ -1045,6 +1879,44 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         { enqueued: number; failed: number; scanned: number; skipped: number },
         Name
       >;
+      getUserAgentConversationStats: FunctionReference<
+        "query",
+        "internal",
+        { agentKey: string; consumerUserId: string },
+        {
+          contextMessages: number;
+          failedMessages: number;
+          queuedMessages: number;
+        },
+        Name
+      >;
+      getUserAgentPushStats: FunctionReference<
+        "query",
+        "internal",
+        { agentKey: string; consumerUserId: string },
+        {
+          activePushJobs: number;
+          latestDispatchAt: null | number;
+          totalDispatches: number;
+          totalPushJobs: number;
+        },
+        Name
+      >;
+      getUserAgentUsageStats: FunctionReference<
+        "query",
+        "internal",
+        { agentKey: string; consumerUserId: string },
+        {
+          activePushJobs: number;
+          contextMessages: number;
+          failedMessages: number;
+          latestDispatchAt: null | number;
+          queuedMessages: number;
+          totalDispatches: number;
+          totalPushJobs: number;
+        },
+        Name
+      >;
       listPushDispatchesByJob: FunctionReference<
         "query",
         "internal",
@@ -1056,6 +1928,49 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           runKey: string;
           scheduledFor: number;
           status: "enqueued" | "skipped" | "failed";
+        }>,
+        Name
+      >;
+      listPushDispatchesForAgent: FunctionReference<
+        "query",
+        "internal",
+        { agentKey: string; consumerUserId: string; limit?: number },
+        Array<{
+          _id: string;
+          createdAt: number;
+          error: null | string;
+          jobId: string;
+          runKey: string;
+          scheduledFor: number;
+          status: "enqueued" | "skipped" | "failed";
+        }>,
+        Name
+      >;
+      listPushJobsForAgent: FunctionReference<
+        "query",
+        "internal",
+        { agentKey: string; consumerUserId: string; includeDisabled?: boolean },
+        Array<{
+          _id: string;
+          agentKey: null | string;
+          companyId: string;
+          consumerUserId: string;
+          createdAt: number;
+          enabled: boolean;
+          lastRunAt: null | number;
+          lastRunKey: null | string;
+          nextRunAt: null | number;
+          periodicity: "manual" | "daily" | "weekly" | "monthly";
+          schedule:
+            | { kind: "manual" }
+            | { kind: "daily"; time: string }
+            | { kind: "weekly"; time: string; weekday: number }
+            | { dayOfMonth: number | "last"; kind: "monthly"; time: string };
+          sourceTemplateId: null | string;
+          text: string;
+          timezone: string;
+          title: string;
+          updatedAt: number;
         }>,
         Name
       >;
@@ -1166,10 +2081,54 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         { enqueuedMessageId: string; runKey: string },
         Name
       >;
+      triggerPushJobNowForAgent: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          agentKey: string;
+          consumerUserId: string;
+          jobId: string;
+          nowMs?: number;
+          providerConfig?: {
+            appName: string;
+            image: string;
+            kind: "fly" | "runpod" | "ecs";
+            organizationSlug: string;
+            region: string;
+            volumeName: string;
+            volumePath: string;
+            volumeSizeGb: number;
+          };
+        },
+        { enqueuedMessageId: string; runKey: string },
+        Name
+      >;
       updatePushJob: FunctionReference<
         "mutation",
         "internal",
         {
+          enabled?: boolean;
+          jobId: string;
+          nowMs?: number;
+          periodicity?: "manual" | "daily" | "weekly" | "monthly";
+          schedule?:
+            | { kind: "manual" }
+            | { kind: "daily"; time: string }
+            | { kind: "weekly"; time: string; weekday: number }
+            | { dayOfMonth: number | "last"; kind: "monthly"; time: string };
+          text?: string;
+          timezone?: string;
+          title?: string;
+        },
+        boolean,
+        Name
+      >;
+      updatePushJobForAgent: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          agentKey: string;
+          consumerUserId: string;
           enabled?: boolean;
           jobId: string;
           nowMs?: number;
@@ -1399,6 +2358,49 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         { uploadUrl: string },
         Name
       >;
+      getConversationViewForUserAgent: FunctionReference<
+        "query",
+        "internal",
+        { agentKey: string; consumerUserId: string; limit?: number },
+        {
+          contextHistory: Array<{
+            at: number;
+            content: string;
+            role: "system" | "user" | "assistant" | "tool";
+          }>;
+          conversationId: string;
+          hasQueuedJobs: boolean;
+          lastAssistantMessageAt: null | number;
+          lastUserMessageAt: null | number;
+          latestMessageId: null | string;
+          pendingToolCalls: Array<{
+            callId: string;
+            status: "pending" | "running" | "done" | "failed";
+            toolName: string;
+          }>;
+          queueItems: Array<{
+            _creationTime: number;
+            _id: string;
+            agentKey: string;
+            attempts: number;
+            conversationId: string;
+            lastError: null | string;
+            maxAttempts: number;
+            payload: {
+              externalMessageId?: string;
+              messageText: string;
+              metadata?: Record<string, string>;
+              provider: string;
+              providerUserId: string;
+              rawUpdateJson?: string;
+            };
+            priority: number;
+            scheduledFor: number;
+            status: "queued" | "processing" | "done" | "failed" | "dead_letter";
+          }>;
+        },
+        Name
+      >;
       getHydrationBundleForClaimedJob: FunctionReference<
         "query",
         "internal",
@@ -1454,6 +2456,21 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           sha256: null | string;
           sizeBytes: null | number;
           snapshotId: string;
+        },
+        Name
+      >;
+      getLatestSnapshotForUserAgent: FunctionReference<
+        "query",
+        "internal",
+        { agentKey: string; consumerUserId: string; nowMs?: number },
+        null | {
+          conversationId: null | string;
+          createdAt: number;
+          downloadUrl: null | string;
+          sha256: null | string;
+          sizeBytes: null | number;
+          snapshotId: string;
+          status: "uploading" | "ready" | "failed" | "expired";
         },
         Name
       >;
@@ -1613,6 +2630,100 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         }>,
         Name
       >;
+      listQueueItemsForConversation: FunctionReference<
+        "query",
+        "internal",
+        { conversationId: string; limit?: number },
+        Array<{
+          _creationTime: number;
+          _id: string;
+          agentKey: string;
+          attempts: number;
+          conversationId: string;
+          lastError: null | string;
+          maxAttempts: number;
+          payload: {
+            externalMessageId?: string;
+            messageText: string;
+            metadata?: Record<string, string>;
+            provider: string;
+            providerUserId: string;
+            rawUpdateJson?: string;
+          };
+          priority: number;
+          scheduledFor: number;
+          status: "queued" | "processing" | "done" | "failed" | "dead_letter";
+        }>,
+        Name
+      >;
+      listQueueItemsForUserAgent: FunctionReference<
+        "query",
+        "internal",
+        {
+          agentKey: string;
+          consumerUserId: string;
+          limit?: number;
+          statuses?: Array<
+            "queued" | "processing" | "done" | "failed" | "dead_letter"
+          >;
+        },
+        Array<{
+          _creationTime: number;
+          _id: string;
+          agentKey: string;
+          attempts: number;
+          conversationId: string;
+          lastError: null | string;
+          maxAttempts: number;
+          payload: {
+            externalMessageId?: string;
+            messageText: string;
+            metadata?: Record<string, string>;
+            provider: string;
+            providerUserId: string;
+            rawUpdateJson?: string;
+          };
+          priority: number;
+          scheduledFor: number;
+          status: "queued" | "processing" | "done" | "failed" | "dead_letter";
+        }>,
+        Name
+      >;
+      listSnapshotsForConversation: FunctionReference<
+        "query",
+        "internal",
+        { conversationId: string; limit?: number; nowMs?: number },
+        Array<{
+          conversationId: null | string;
+          createdAt: number;
+          downloadUrl: null | string;
+          sha256: null | string;
+          sizeBytes: null | number;
+          snapshotId: string;
+          status: "uploading" | "ready" | "failed" | "expired";
+        }>,
+        Name
+      >;
+      listSnapshotsForUserAgent: FunctionReference<
+        "query",
+        "internal",
+        {
+          agentKey: string;
+          consumerUserId: string;
+          limit?: number;
+          nowMs?: number;
+        },
+        Array<{
+          conversationId: null | string;
+          createdAt: number;
+          downloadUrl: null | string;
+          sha256: null | string;
+          sizeBytes: null | number;
+          snapshotId: string;
+          status: "uploading" | "ready" | "failed" | "expired";
+        }>,
+        Name
+      >;
       messageRuntimeConfig: FunctionReference<
         "query",
         "internal",
@@ -1655,6 +2766,29 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "internal",
         { limit?: number; nowMs?: number },
         { requeued: number; unlocked: number },
+        Name
+      >;
+      sendMessageToUserAgent: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          agentKey: string;
+          consumerUserId: string;
+          content: string;
+          metadata?: Record<string, string>;
+          nowMs?: number;
+          providerConfig?: {
+            appName: string;
+            image: string;
+            kind: "fly" | "runpod" | "ecs";
+            organizationSlug: string;
+            region: string;
+            volumeName: string;
+            volumePath: string;
+            volumeSizeGb: number;
+          };
+        },
+        string,
         Name
       >;
       setGlobalSkillStatus: FunctionReference<

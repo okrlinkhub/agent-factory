@@ -6,6 +6,8 @@ import {
   mutation,
   query,
 } from "./_generated/server.js";
+import type { MutationCtx, QueryCtx } from "./_generated/server.js";
+import type { Id } from "./_generated/dataModel.js";
 import { computeRetryDelayMs, DEFAULT_CONFIG, providerConfigValidator } from "./config.js";
 import {
   canTransitionWorkerStatus,
@@ -46,6 +48,68 @@ const claimedJobValidator = v.object({
   leaseId: v.string(),
   leaseExpiresAt: v.number(),
   payload: queuePayloadValidator,
+});
+
+const conversationHistoryItemValidator = v.object({
+  role: v.union(
+    v.literal("system"),
+    v.literal("user"),
+    v.literal("assistant"),
+    v.literal("tool"),
+  ),
+  content: v.string(),
+  at: v.number(),
+});
+
+const pendingToolCallViewValidator = v.object({
+  toolName: v.string(),
+  callId: v.string(),
+  status: v.union(
+    v.literal("pending"),
+    v.literal("running"),
+    v.literal("done"),
+    v.literal("failed"),
+  ),
+});
+
+const queueItemViewValidator = v.object({
+  _id: v.id("messageQueue"),
+  _creationTime: v.number(),
+  conversationId: v.string(),
+  agentKey: v.string(),
+  status: queueStatusValidator,
+  priority: v.number(),
+  scheduledFor: v.number(),
+  attempts: v.number(),
+  maxAttempts: v.number(),
+  lastError: v.union(v.null(), v.string()),
+  payload: queuePayloadValidator,
+});
+
+const conversationViewValidator = v.object({
+  conversationId: v.string(),
+  contextHistory: v.array(conversationHistoryItemValidator),
+  pendingToolCalls: v.array(pendingToolCallViewValidator),
+  queueItems: v.array(queueItemViewValidator),
+  hasQueuedJobs: v.boolean(),
+  latestMessageId: v.union(v.null(), v.id("messageQueue")),
+  lastUserMessageAt: v.union(v.null(), v.number()),
+  lastAssistantMessageAt: v.union(v.null(), v.number()),
+});
+
+const snapshotViewValidator = v.object({
+  snapshotId: v.id("dataSnapshots"),
+  createdAt: v.number(),
+  sizeBytes: v.union(v.null(), v.number()),
+  sha256: v.union(v.null(), v.string()),
+  downloadUrl: v.union(v.null(), v.string()),
+  status: v.union(
+    v.literal("uploading"),
+    v.literal("ready"),
+    v.literal("failed"),
+    v.literal("expired"),
+  ),
+  conversationId: v.union(v.null(), v.string()),
 });
 
 const workerAssignmentValidator = v.object({
@@ -136,91 +200,7 @@ export const enqueueMessage = mutation({
   },
   returns: v.id("messageQueue"),
   handler: async (ctx, args) => {
-    const nowMs = args.nowMs ?? Date.now();
-    const messageRuntimeConfigRow = await ctx.db
-      .query("runtimeConfig")
-      .withIndex("by_key", (q) => q.eq("key", RUNTIME_CONFIG_KEYS.message))
-      .unique();
-    const profile = await ctx.db
-      .query("agentProfiles")
-      .withIndex("by_agentKey", (q) => q.eq("agentKey", args.agentKey))
-      .unique();
-    if (!profile || !profile.enabled) {
-      throw new Error(`Agent profile '${args.agentKey}' not found or disabled`);
-    }
-    const providerUserIdStr =
-      typeof args.payload.providerUserId === "string" &&
-      args.payload.providerUserId.trim().length > 0
-        ? args.payload.providerUserId.trim()
-        : null;
-
-    if (providerUserIdStr === null) {
-      throw new Error(
-        `providerUserId is required but missing in payload.providerUserId=${JSON.stringify(args.payload.providerUserId)}`,
-      );
-    }
-
-    const payload = {
-      ...args.payload,
-      messageText: appendSystemPromptToMessage(
-        args.payload.messageText,
-        messageRuntimeConfigRow?.messageConfig?.systemPrompt,
-      ),
-      providerUserId: providerUserIdStr,
-      metadata: {
-        ...(args.payload.metadata ?? {}),
-        providerUserId: providerUserIdStr,
-      },
-    };
-
-    const existingConversation = await ctx.db
-      .query("conversations")
-      .withIndex("by_conversationId", (q) =>
-        q.eq("conversationId", args.conversationId),
-      )
-      .unique();
-
-    if (!existingConversation) {
-      await ctx.db.insert("conversations", {
-        conversationId: args.conversationId,
-        agentKey: args.agentKey,
-        contextHistory: [],
-        pendingToolCalls: [],
-      });
-    } else if (existingConversation.agentKey !== args.agentKey) {
-      throw new Error(
-        `Conversation '${args.conversationId}' is already bound to agent '${existingConversation.agentKey}', cannot enqueue for '${args.agentKey}'.`,
-      );
-    }
-
-    const priority = Math.min(
-      DEFAULT_CONFIG.queue.maxPriority,
-      Math.max(0, args.priority ?? DEFAULT_CONFIG.queue.defaultPriority),
-    );
-
-    const messageId = await ctx.db.insert("messageQueue", {
-      conversationId: args.conversationId,
-      agentKey: args.agentKey,
-      payload,
-      status: "queued",
-      priority,
-      scheduledFor: args.scheduledFor ?? nowMs,
-      attempts: 0,
-      maxAttempts: args.maxAttempts ?? DEFAULT_CONFIG.retry.maxAttempts,
-    });
-    try {
-      await ctx.scheduler.runAfter(0, (internal.scheduler as any).reconcileWorkerPoolFromEnqueue, {
-        workspaceId: "default",
-        providerConfig: args.providerConfig,
-      });
-    } catch (error) {
-      console.warn(
-        `[queue] failed to schedule reconcile after enqueue: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
-    return messageId;
+    return await enqueueMessageRecord(ctx, args);
   },
 });
 
@@ -1798,6 +1778,221 @@ export const hasQueuedJobsForConversation = query({
   },
 });
 
+export const listQueueItemsForConversation = query({
+  args: {
+    conversationId: v.string(),
+    limit: v.optional(v.number()),
+  },
+  returns: v.array(queueItemViewValidator),
+  handler: async (ctx, args) => {
+    const limit = Math.max(1, Math.min(args.limit ?? 100, 500));
+    const rows = await ctx.db
+      .query("messageQueue")
+      .withIndex("by_conversationId_and_scheduledFor", (q) =>
+        q.eq("conversationId", args.conversationId),
+      )
+      .order("desc")
+      .take(limit);
+    return rows.map((row) => ({
+      _id: row._id,
+      _creationTime: row._creationTime,
+      conversationId: row.conversationId,
+      agentKey: row.agentKey,
+      status: row.status,
+      priority: row.priority,
+      scheduledFor: row.scheduledFor,
+      attempts: row.attempts,
+      maxAttempts: row.maxAttempts,
+      lastError: row.lastError ?? null,
+      payload: row.payload,
+    }));
+  },
+});
+
+export const listQueueItemsForUserAgent = query({
+  args: {
+    consumerUserId: v.string(),
+    agentKey: v.string(),
+    statuses: v.optional(v.array(queueStatusValidator)),
+    limit: v.optional(v.number()),
+  },
+  returns: v.array(queueItemViewValidator),
+  handler: async (ctx, args) => {
+    const target = await resolveConversationTargetForUserAgent(ctx, args.consumerUserId, args.agentKey);
+    const rows = await fetchQueueItemsForConversation(ctx, target.conversationId, args.limit);
+    const allowedStatuses = args.statuses ?? null;
+    return allowedStatuses
+      ? rows.filter((row) => allowedStatuses.includes(row.status))
+      : rows;
+  },
+});
+
+export const getConversationViewForUserAgent = query({
+  args: {
+    consumerUserId: v.string(),
+    agentKey: v.string(),
+    limit: v.optional(v.number()),
+  },
+  returns: conversationViewValidator,
+  handler: async (ctx, args) => {
+    const target = await resolveConversationTargetForUserAgent(ctx, args.consumerUserId, args.agentKey);
+    const conversation = await ctx.db
+      .query("conversations")
+      .withIndex("by_conversationId", (q) => q.eq("conversationId", target.conversationId))
+      .unique();
+    const queueItems = await fetchQueueItemsForConversation(ctx, target.conversationId, args.limit);
+    const contextHistory = conversation?.contextHistory ?? [];
+    const lastUserMessageAt =
+      [...contextHistory].reverse().find((item) => item.role === "user")?.at ?? null;
+    const lastAssistantMessageAt =
+      [...contextHistory].reverse().find((item) => item.role === "assistant")?.at ?? null;
+    return {
+      conversationId: target.conversationId,
+      contextHistory,
+      pendingToolCalls: conversation?.pendingToolCalls ?? [],
+      queueItems,
+      hasQueuedJobs: queueItems.some(
+        (item) => item.status === "queued" || item.status === "processing",
+      ),
+      latestMessageId: queueItems[0]?._id ?? null,
+      lastUserMessageAt,
+      lastAssistantMessageAt,
+    };
+  },
+});
+
+export const sendMessageToUserAgent = mutation({
+  args: {
+    consumerUserId: v.string(),
+    agentKey: v.string(),
+    content: v.string(),
+    metadata: v.optional(v.record(v.string(), v.string())),
+    nowMs: v.optional(v.number()),
+    providerConfig: v.optional(providerConfigValidator),
+  },
+  returns: v.id("messageQueue"),
+  handler: async (ctx, args) => {
+    const nowMs = args.nowMs ?? Date.now();
+    const target = await resolveConversationTargetForUserAgent(
+      ctx,
+      args.consumerUserId,
+      args.agentKey,
+      true,
+    );
+    const providerUserId =
+      target.telegramUserId ?? target.telegramChatId ?? args.consumerUserId;
+    return await enqueueMessageRecord(ctx, {
+      conversationId: target.conversationId,
+      agentKey: args.agentKey,
+      payload: {
+        provider: target.provider,
+        providerUserId,
+        messageText: args.content,
+        metadata: {
+          ...(args.metadata ?? {}),
+          consumerUserId: args.consumerUserId,
+          source: "user_agent_api",
+          ...(target.telegramChatId ? { telegramChatId: target.telegramChatId } : {}),
+          ...(target.telegramUserId ? { telegramUserId: target.telegramUserId } : {}),
+        },
+      },
+      scheduledFor: nowMs,
+      providerConfig: args.providerConfig,
+    });
+  },
+});
+
+export const listSnapshotsForConversation = query({
+  args: {
+    conversationId: v.string(),
+    limit: v.optional(v.number()),
+    nowMs: v.optional(v.number()),
+  },
+  returns: v.array(snapshotViewValidator),
+  handler: async (ctx, args) => {
+    const limit = Math.max(1, Math.min(args.limit ?? 50, 200));
+    const nowMs = args.nowMs ?? Date.now();
+    const rows = await ctx.db
+      .query("dataSnapshots")
+      .withIndex("by_conversationId_and_createdAt", (q) =>
+        q.eq("conversationId", args.conversationId),
+      )
+      .order("desc")
+      .take(limit);
+    return await Promise.all(
+      rows.map(async (row) => ({
+        snapshotId: row._id,
+        createdAt: row.createdAt,
+        sizeBytes: row.sizeBytes ?? null,
+        sha256: row.sha256 ?? null,
+        downloadUrl:
+          row.archiveFileId !== undefined && row.status === "ready" && row.expiresAt > nowMs
+            ? ((await ctx.storage.getUrl(row.archiveFileId)) ?? null)
+            : null,
+        status: row.status,
+        conversationId: row.conversationId ?? null,
+      })),
+    );
+  },
+});
+
+export const listSnapshotsForUserAgent = query({
+  args: {
+    consumerUserId: v.string(),
+    agentKey: v.string(),
+    limit: v.optional(v.number()),
+    nowMs: v.optional(v.number()),
+  },
+  returns: v.array(snapshotViewValidator),
+  handler: async (ctx, args) => {
+    const target = await resolveConversationTargetForUserAgent(
+      ctx,
+      args.consumerUserId,
+      args.agentKey,
+    );
+    const limit = Math.max(1, Math.min(args.limit ?? 50, 200));
+    const nowMs = args.nowMs ?? Date.now();
+    const rows = await ctx.db
+      .query("dataSnapshots")
+      .withIndex("by_agentKey_and_createdAt", (q) => q.eq("agentKey", args.agentKey))
+      .order("desc")
+      .take(limit * 3);
+    const filtered = rows
+      .filter(
+        (row) =>
+          row.conversationId === undefined || row.conversationId === target.conversationId,
+      )
+      .slice(0, limit);
+    return await Promise.all(
+      filtered.map(async (row) => ({
+        snapshotId: row._id,
+        createdAt: row.createdAt,
+        sizeBytes: row.sizeBytes ?? null,
+        sha256: row.sha256 ?? null,
+        downloadUrl:
+          row.archiveFileId !== undefined && row.status === "ready" && row.expiresAt > nowMs
+            ? ((await ctx.storage.getUrl(row.archiveFileId)) ?? null)
+            : null,
+        status: row.status,
+        conversationId: row.conversationId ?? null,
+      })),
+    );
+  },
+});
+
+export const getLatestSnapshotForUserAgent = query({
+  args: {
+    consumerUserId: v.string(),
+    agentKey: v.string(),
+    nowMs: v.optional(v.number()),
+  },
+  returns: v.union(v.null(), snapshotViewValidator),
+  handler: async (ctx, args) => {
+    const rows = await fetchSnapshotsForUserAgent(ctx, args);
+    return rows[0] ?? null;
+  },
+});
+
 export const getReadyConversationCountForScheduler = internalQuery({
   args: {
     nowMs: v.optional(v.number()),
@@ -2428,6 +2623,227 @@ function appendSystemPromptToMessage(messageText: string, systemPrompt?: string)
     return normalizedSystemPrompt;
   }
   return `${normalizedMessageText}\n\n${normalizedSystemPrompt}`;
+}
+
+async function fetchQueueItemsForConversation(
+  ctx: QueryCtx,
+  conversationId: string,
+  limit?: number,
+) {
+  const boundedLimit = Math.max(1, Math.min(limit ?? 100, 500));
+  const rows = await ctx.db
+    .query("messageQueue")
+    .withIndex("by_conversationId_and_scheduledFor", (q) => q.eq("conversationId", conversationId))
+    .order("desc")
+    .take(boundedLimit);
+  return rows.map((row) => ({
+    _id: row._id,
+    _creationTime: row._creationTime,
+    conversationId: row.conversationId,
+    agentKey: row.agentKey,
+    status: row.status,
+    priority: row.priority,
+    scheduledFor: row.scheduledFor,
+    attempts: row.attempts,
+    maxAttempts: row.maxAttempts,
+    lastError: row.lastError ?? null,
+    payload: row.payload,
+  }));
+}
+
+async function enqueueMessageRecord(
+  ctx: MutationCtx,
+  args: {
+    conversationId: string;
+    agentKey: string;
+    payload: {
+      provider: string;
+      providerUserId: string;
+      messageText: string;
+      externalMessageId?: string;
+      rawUpdateJson?: string;
+      metadata?: Record<string, string>;
+    };
+    priority?: number;
+    scheduledFor?: number;
+    maxAttempts?: number;
+    nowMs?: number;
+    providerConfig?: typeof DEFAULT_CONFIG.provider;
+  },
+) {
+  const nowMs = args.nowMs ?? Date.now();
+  const messageRuntimeConfigRow = await ctx.db
+    .query("runtimeConfig")
+    .withIndex("by_key", (q) => q.eq("key", RUNTIME_CONFIG_KEYS.message))
+    .unique();
+  const profile = await ctx.db
+    .query("agentProfiles")
+    .withIndex("by_agentKey", (q) => q.eq("agentKey", args.agentKey))
+    .unique();
+  if (!profile || !profile.enabled) {
+    throw new Error(`Agent profile '${args.agentKey}' not found or disabled`);
+  }
+  const providerUserIdStr =
+    typeof args.payload.providerUserId === "string" && args.payload.providerUserId.trim().length > 0
+      ? args.payload.providerUserId.trim()
+      : null;
+  if (providerUserIdStr === null) {
+    throw new Error(
+      `providerUserId is required but missing in payload.providerUserId=${JSON.stringify(args.payload.providerUserId)}`,
+    );
+  }
+  const payload = {
+    ...args.payload,
+    messageText: appendSystemPromptToMessage(
+      args.payload.messageText,
+      messageRuntimeConfigRow?.messageConfig?.systemPrompt,
+    ),
+    providerUserId: providerUserIdStr,
+    metadata: {
+      ...(args.payload.metadata ?? {}),
+      providerUserId: providerUserIdStr,
+    },
+  };
+  const existingConversation = await ctx.db
+    .query("conversations")
+    .withIndex("by_conversationId", (q) => q.eq("conversationId", args.conversationId))
+    .unique();
+  if (!existingConversation) {
+    await ctx.db.insert("conversations", {
+      conversationId: args.conversationId,
+      agentKey: args.agentKey,
+      contextHistory: [],
+      pendingToolCalls: [],
+    });
+  } else if (existingConversation.agentKey !== args.agentKey) {
+    throw new Error(
+      `Conversation '${args.conversationId}' is already bound to agent '${existingConversation.agentKey}', cannot enqueue for '${args.agentKey}'.`,
+    );
+  }
+  const priority = Math.min(
+    DEFAULT_CONFIG.queue.maxPriority,
+    Math.max(0, args.priority ?? DEFAULT_CONFIG.queue.defaultPriority),
+  );
+  const messageId = await ctx.db.insert("messageQueue", {
+    conversationId: args.conversationId,
+    agentKey: args.agentKey,
+    payload,
+    status: "queued",
+    priority,
+    scheduledFor: args.scheduledFor ?? nowMs,
+    attempts: 0,
+    maxAttempts: args.maxAttempts ?? DEFAULT_CONFIG.retry.maxAttempts,
+  });
+  try {
+    await ctx.scheduler.runAfter(0, (internal.scheduler as any).reconcileWorkerPoolFromEnqueue, {
+      workspaceId: "default",
+      providerConfig: args.providerConfig,
+    });
+  } catch (error) {
+    console.warn(
+      `[queue] failed to schedule reconcile after enqueue: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  return messageId;
+}
+
+async function resolveConversationTargetForUserAgent(
+  ctx: QueryCtx | MutationCtx,
+  consumerUserId: string,
+  agentKey: string,
+  requireActive = false,
+): Promise<{
+  conversationId: string;
+  provider: string;
+  telegramChatId: string | null;
+  telegramUserId: string | null;
+}> {
+  const bindings = await ctx.db
+    .query("identityBindings")
+    .withIndex("by_consumerUserId_and_agentKey_and_boundAt", (q) =>
+      q.eq("consumerUserId", consumerUserId).eq("agentKey", agentKey),
+    )
+    .order("desc")
+    .take(20);
+  const latestBinding = bindings[0] ?? null;
+  if (requireActive && latestBinding?.status !== "active") {
+    throw new Error("No active binding found for consumerUserId and agentKey");
+  }
+  const telegramChatId = latestBinding?.telegramChatId?.trim() || null;
+  const telegramUserId = latestBinding?.telegramUserId?.trim() || null;
+  if (telegramChatId) {
+    return {
+      conversationId: `telegram:${telegramChatId}`,
+      provider: "telegram",
+      telegramChatId,
+      telegramUserId,
+    };
+  }
+  return {
+    conversationId: `user:${consumerUserId}`,
+    provider: "system_push",
+    telegramChatId: null,
+    telegramUserId: null,
+  };
+}
+
+async function buildSnapshotView(
+  ctx: QueryCtx,
+  row: {
+    _id: Id<"dataSnapshots">;
+    archiveFileId?: Id<"_storage">;
+    createdAt: number;
+    sizeBytes?: number;
+    sha256?: string;
+    status: "uploading" | "ready" | "failed" | "expired";
+    conversationId?: string;
+    expiresAt: number;
+  },
+  nowMs: number,
+) {
+  return {
+    snapshotId: row._id,
+    createdAt: row.createdAt,
+    sizeBytes: row.sizeBytes ?? null,
+    sha256: row.sha256 ?? null,
+    downloadUrl:
+      row.archiveFileId !== undefined && row.status === "ready" && row.expiresAt > nowMs
+        ? ((await ctx.storage.getUrl(row.archiveFileId)) ?? null)
+        : null,
+    status: row.status,
+    conversationId: row.conversationId ?? null,
+  };
+}
+
+async function fetchSnapshotsForUserAgent(
+  ctx: QueryCtx,
+  args: {
+    consumerUserId: string;
+    agentKey: string;
+    limit?: number;
+    nowMs?: number;
+  },
+) {
+  const target = await resolveConversationTargetForUserAgent(
+    ctx,
+    args.consumerUserId,
+    args.agentKey,
+  );
+  const limit = Math.max(1, Math.min(args.limit ?? 50, 200));
+  const nowMs = args.nowMs ?? Date.now();
+  const rows = await ctx.db
+    .query("dataSnapshots")
+    .withIndex("by_agentKey_and_createdAt", (q) => q.eq("agentKey", args.agentKey))
+    .order("desc")
+    .take(limit * 3);
+  const filtered = rows
+    .filter(
+      (row) => row.conversationId === undefined || row.conversationId === target.conversationId,
+    )
+    .slice(0, limit);
+  return await Promise.all(filtered.map((row) => buildSnapshotView(ctx, row, nowMs)));
 }
 
 async function scheduleIdleShutdownWatchdog(

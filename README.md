@@ -69,6 +69,74 @@ export default crons;
 
 ## Usage
 
+### User-facing agent APIs
+
+Starting with this release, the component also exposes an additive set of **user-facing aggregate APIs** for building pages like `MyAgent` and `MyAgentNew` without reconstructing state in the consumer app.
+
+What stays in the consumer app:
+- naming policy for agents and Telegram usernames
+- product-specific onboarding copy
+- cron presets or local `agentSettings`
+
+What is now exposed directly by the component:
+- user agent overview and active/history lookup
+- onboarding and pairing state
+- conversation view and queue items for a user agent
+- agent-scoped push jobs and aggregate usage stats
+- user-centric snapshot listing and latest snapshot lookup
+
+Core APIs added for this pattern:
+- `listUserAgents`
+- `getUserAgent`
+- `getActiveUserAgent`
+- `getUserAgentsOverview`
+- `createUserAgentPairing`
+- `getUserAgentPairingStatus`
+- `importTelegramTokenForAgent`
+- `getUserAgentOnboardingState`
+- `getConversationViewForUserAgent`
+- `listQueueItemsForUserAgent`
+- `sendMessageToUserAgent`
+- `listPushJobsForAgent`
+- `listPushDispatchesForAgent`
+- `getUserAgentUsageStats`
+- `listSnapshotsForUserAgent`
+- `getLatestSnapshotForUserAgent`
+
+Minimal consumer example:
+
+```ts
+import { query, mutation } from "./_generated/server";
+import { components } from "./_generated/api";
+import { v } from "convex/values";
+
+export const getMyAgentOverview = query({
+  args: { consumerUserId: v.string() },
+  handler: async (ctx, args) => {
+    return await ctx.runQuery(components.agentFactory.lib.getUserAgentsOverview, {
+      consumerUserId: args.consumerUserId,
+    });
+  },
+});
+
+export const sendMessageToMyAgent = mutation({
+  args: {
+    consumerUserId: v.string(),
+    agentKey: v.string(),
+    content: v.string(),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.runMutation(components.agentFactory.lib.sendMessageToUserAgent, {
+      consumerUserId: args.consumerUserId,
+      agentKey: args.agentKey,
+      content: args.content,
+    });
+  },
+});
+```
+
+The example consumer in [example/convex/example.ts](example/convex/example.ts) re-exports these APIs through `exposeApi(...)` and includes lightweight wrappers you can adapt.
+
 ### First required setup: mandatory secrets for every worker/agent
 
 Before running worker autoscaling (enqueue trigger, cron, or manual reconcile), you must

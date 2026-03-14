@@ -99,6 +99,7 @@ export default defineSchema({
     ])
     .index("by_status_and_leaseExpiresAt", ["status", "leaseExpiresAt"])
     .index("by_conversationId_and_status", ["conversationId", "status"])
+    .index("by_conversationId_and_scheduledFor", ["conversationId", "scheduledFor"])
     .index("by_claimedBy_and_status", ["claimedBy", "status"])
     .index("by_agentKey_and_status", ["agentKey", "status"]),
 
@@ -179,6 +180,7 @@ export default defineSchema({
   })
     .index("by_workerId_and_createdAt", ["workerId", "createdAt"])
     .index("by_workspaceId_and_agentKey_and_createdAt", ["workspaceId", "agentKey", "createdAt"])
+    .index("by_agentKey_and_createdAt", ["agentKey", "createdAt"])
     .index("by_conversationId_and_createdAt", ["conversationId", "createdAt"])
     .index("by_status_and_expiresAt", ["status", "expiresAt"]),
 
@@ -212,6 +214,11 @@ export default defineSchema({
     revokedAt: v.optional(v.number()),
   })
     .index("by_consumerUserId_and_status", ["consumerUserId", "status"])
+    .index("by_consumerUserId_and_agentKey_and_boundAt", [
+      "consumerUserId",
+      "agentKey",
+      "boundAt",
+    ])
     .index("by_telegramUserId_and_status", ["telegramUserId", "status"])
     .index("by_telegramChatId_and_status", ["telegramChatId", "status"])
     .index("by_agentKey_and_status", ["agentKey", "status"]),
@@ -229,6 +236,11 @@ export default defineSchema({
   })
     .index("by_code", ["code"])
     .index("by_consumerUserId_and_status", ["consumerUserId", "status"])
+    .index("by_consumerUserId_and_agentKey_and_createdAt", [
+      "consumerUserId",
+      "agentKey",
+      "createdAt",
+    ])
     .index("by_expiresAt", ["expiresAt"]),
 
   globalSkills: defineTable({

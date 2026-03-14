@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api.js";
 import { mutation, query } from "./_generated/server.js";
-import type { MutationCtx } from "./_generated/server.js";
+import type { MutationCtx, QueryCtx } from "./_generated/server.js";
 import type { Id } from "./_generated/dataModel.js";
 import { providerConfigValidator } from "./config.js";
 import type { ProviderConfig } from "./config.js";
@@ -89,6 +89,39 @@ const dispatchStatusValidator = v.union(
   v.literal("skipped"),
   v.literal("failed"),
 );
+
+const dispatchViewValidator = v.object({
+  _id: v.id("messagePushDispatches"),
+  jobId: v.id("messagePushJobs"),
+  runKey: v.string(),
+  status: dispatchStatusValidator,
+  scheduledFor: v.number(),
+  createdAt: v.number(),
+  error: v.union(v.null(), v.string()),
+});
+
+const pushStatsValidator = v.object({
+  totalPushJobs: v.number(),
+  activePushJobs: v.number(),
+  totalDispatches: v.number(),
+  latestDispatchAt: v.union(v.null(), v.number()),
+});
+
+const conversationStatsValidator = v.object({
+  contextMessages: v.number(),
+  queuedMessages: v.number(),
+  failedMessages: v.number(),
+});
+
+const usageStatsValidator = v.object({
+  totalPushJobs: v.number(),
+  activePushJobs: v.number(),
+  totalDispatches: v.number(),
+  latestDispatchAt: v.union(v.null(), v.number()),
+  contextMessages: v.number(),
+  queuedMessages: v.number(),
+  failedMessages: v.number(),
+});
 
 type Periodicity = "manual" | "daily" | "weekly" | "monthly";
 type ManualSchedule = { kind: "manual" };
@@ -794,6 +827,317 @@ export const listPushDispatchesByJob = query({
   },
 });
 
+export const listPushJobsForAgent = query({
+  args: {
+    consumerUserId: v.string(),
+    agentKey: v.string(),
+    includeDisabled: v.optional(v.boolean()),
+  },
+  returns: v.array(jobViewValidator),
+  handler: async (ctx, args) => {
+    return await fetchPushJobsForAgent(ctx, args.consumerUserId, args.agentKey, args.includeDisabled);
+  },
+});
+
+export const createPushJobFromTemplateForAgent = mutation({
+  args: {
+    companyId: v.string(),
+    consumerUserId: v.string(),
+    agentKey: v.string(),
+    templateId: v.id("messagePushTemplates"),
+    timezone: v.string(),
+    schedule: v.optional(scheduleValidator),
+    enabled: v.optional(v.boolean()),
+    nowMs: v.optional(v.number()),
+  },
+  returns: v.id("messagePushJobs"),
+  handler: async (ctx, args) => {
+    assertValidTimezone(args.timezone);
+    const activeAgentKey = await resolveActiveAgentKeyForUser(ctx, args.consumerUserId);
+    if (activeAgentKey !== args.agentKey) {
+      throw new Error("Agent key must match the current active binding for the user");
+    }
+    const template = await ctx.db.get(args.templateId);
+    if (!template) {
+      throw new Error("Template not found");
+    }
+    if (template.companyId !== args.companyId) {
+      throw new Error("Template company mismatch");
+    }
+    const schedule = resolveScheduleForTemplate(
+      template.periodicity,
+      template.suggestedTimes,
+      args.schedule,
+    );
+    validateSchedule(template.periodicity, schedule);
+    const nowMs = args.nowMs ?? Date.now();
+    const enabled = args.enabled ?? true;
+    const recurringSchedule = toRecurringSchedule(template.periodicity, schedule);
+    const nextRunAt =
+      enabled && recurringSchedule
+        ? computeNextRunAt({
+            periodicity: recurringSchedule.periodicity,
+            schedule: recurringSchedule.schedule,
+            timezone: args.timezone,
+            fromMs: nowMs,
+          })
+        : undefined;
+    return await ctx.db.insert("messagePushJobs", {
+      companyId: args.companyId,
+      consumerUserId: args.consumerUserId,
+      agentKey: args.agentKey,
+      sourceTemplateId: template._id,
+      title: template.title,
+      text: template.text,
+      periodicity: template.periodicity,
+      timezone: args.timezone,
+      schedule,
+      enabled,
+      nextRunAt,
+      createdAt: nowMs,
+      updatedAt: nowMs,
+    });
+  },
+});
+
+export const createPushJobCustomForAgent = mutation({
+  args: {
+    companyId: v.string(),
+    consumerUserId: v.string(),
+    agentKey: v.string(),
+    title: v.string(),
+    text: v.string(),
+    periodicity: periodicityValidator,
+    timezone: v.string(),
+    schedule: scheduleValidator,
+    enabled: v.optional(v.boolean()),
+    nowMs: v.optional(v.number()),
+  },
+  returns: v.id("messagePushJobs"),
+  handler: async (ctx, args) => {
+    assertValidTimezone(args.timezone);
+    validateSchedule(args.periodicity, args.schedule);
+    const activeAgentKey = await resolveActiveAgentKeyForUser(ctx, args.consumerUserId);
+    if (activeAgentKey !== args.agentKey) {
+      throw new Error("Agent key must match the current active binding for the user");
+    }
+    const nowMs = args.nowMs ?? Date.now();
+    const enabled = args.enabled ?? true;
+    const recurringSchedule = toRecurringSchedule(args.periodicity, args.schedule);
+    const nextRunAt =
+      enabled && recurringSchedule
+        ? computeNextRunAt({
+            periodicity: recurringSchedule.periodicity,
+            schedule: recurringSchedule.schedule,
+            timezone: args.timezone,
+            fromMs: nowMs,
+          })
+        : undefined;
+    return await ctx.db.insert("messagePushJobs", {
+      companyId: args.companyId,
+      consumerUserId: args.consumerUserId,
+      agentKey: args.agentKey,
+      sourceTemplateId: undefined,
+      title: args.title,
+      text: args.text,
+      periodicity: args.periodicity,
+      timezone: args.timezone,
+      schedule: args.schedule,
+      enabled,
+      nextRunAt,
+      createdAt: nowMs,
+      updatedAt: nowMs,
+    });
+  },
+});
+
+export const updatePushJobForAgent = mutation({
+  args: {
+    consumerUserId: v.string(),
+    agentKey: v.string(),
+    jobId: v.id("messagePushJobs"),
+    title: v.optional(v.string()),
+    text: v.optional(v.string()),
+    periodicity: v.optional(periodicityValidator),
+    timezone: v.optional(v.string()),
+    schedule: v.optional(scheduleValidator),
+    enabled: v.optional(v.boolean()),
+    nowMs: v.optional(v.number()),
+  },
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    const job = await getOwnedPushJobForAgent(ctx, args.consumerUserId, args.agentKey, args.jobId);
+    if (!job) {
+      return false;
+    }
+    const nowMs = args.nowMs ?? Date.now();
+    const periodicity = args.periodicity ?? job.periodicity;
+    const timezone = args.timezone ?? job.timezone;
+    const schedule = args.schedule ?? job.schedule;
+    const enabled = args.enabled ?? job.enabled;
+    assertValidTimezone(timezone);
+    validateSchedule(periodicity, schedule);
+    const recurringSchedule = toRecurringSchedule(periodicity, schedule);
+    const nextRunAt =
+      enabled && recurringSchedule
+        ? computeNextRunAt({
+            periodicity: recurringSchedule.periodicity,
+            schedule: recurringSchedule.schedule,
+            timezone,
+            fromMs: nowMs,
+          })
+        : undefined;
+    await ctx.db.patch(job._id, {
+      title: args.title ?? job.title,
+      text: args.text ?? job.text,
+      periodicity,
+      timezone,
+      schedule,
+      enabled,
+      nextRunAt,
+      updatedAt: nowMs,
+    });
+    return true;
+  },
+});
+
+export const triggerPushJobNowForAgent = mutation({
+  args: {
+    consumerUserId: v.string(),
+    agentKey: v.string(),
+    jobId: v.id("messagePushJobs"),
+    nowMs: v.optional(v.number()),
+    providerConfig: v.optional(providerConfigValidator),
+  },
+  returns: v.object({
+    enqueuedMessageId: v.id("messageQueue"),
+    runKey: v.string(),
+  }),
+  handler: async (ctx, args) => {
+    const job = await getOwnedPushJobForAgent(ctx, args.consumerUserId, args.agentKey, args.jobId);
+    if (!job) {
+      throw new Error("Push job not found for agent");
+    }
+    const nowMs = args.nowMs ?? Date.now();
+    const conversationTarget = await resolveConversationTargetForUser(ctx, job.consumerUserId);
+    const runKey = `manual:${job._id}:${nowMs}`;
+    const targetProviderUserId =
+      conversationTarget.source === "telegram_chat"
+        ? (conversationTarget.telegramUserId ?? conversationTarget.telegramChatId ?? job.consumerUserId)
+        : job.consumerUserId;
+    const messageId = await enqueuePushMessage(ctx, {
+      conversationId: conversationTarget.conversationId,
+      agentKey: args.agentKey,
+      consumerUserId: job.consumerUserId,
+      text: job.text,
+      metadata: {
+        pushJobId: String(job._id),
+        runKey,
+        pushMode: "manual",
+        conversationTargetSource: conversationTarget.source,
+        ...(conversationTarget.telegramChatId
+          ? { telegramChatId: conversationTarget.telegramChatId }
+          : {}),
+        ...(conversationTarget.telegramUserId
+          ? { telegramUserId: conversationTarget.telegramUserId }
+          : {}),
+      },
+      scheduledFor: nowMs,
+      provider: conversationTarget.source === "telegram_chat" ? "telegram" : "system_push",
+      providerUserId: targetProviderUserId,
+      providerConfig: args.providerConfig,
+    });
+    await ctx.db.insert("messagePushDispatches", {
+      jobId: job._id,
+      consumerUserId: job.consumerUserId,
+      runKey,
+      scheduledFor: nowMs,
+      enqueuedMessageId: messageId,
+      status: "enqueued",
+      createdAt: nowMs,
+    });
+    const recurringSchedule = toRecurringSchedule(job.periodicity, job.schedule);
+    const nextRunAt =
+      job.enabled && recurringSchedule
+        ? computeNextRunAt({
+            periodicity: recurringSchedule.periodicity,
+            schedule: recurringSchedule.schedule,
+            timezone: job.timezone,
+            fromMs: nowMs,
+          })
+        : undefined;
+    await ctx.db.patch(job._id, {
+      agentKey: args.agentKey,
+      lastRunAt: nowMs,
+      lastRunKey: runKey,
+      nextRunAt,
+      updatedAt: nowMs,
+    });
+    return {
+      enqueuedMessageId: messageId,
+      runKey,
+    };
+  },
+});
+
+export const listPushDispatchesForAgent = query({
+  args: {
+    consumerUserId: v.string(),
+    agentKey: v.string(),
+    limit: v.optional(v.number()),
+  },
+  returns: v.array(dispatchViewValidator),
+  handler: async (ctx, args) => {
+    const dispatches = await fetchPushDispatchesForAgent(
+      ctx,
+      args.consumerUserId,
+      args.agentKey,
+      args.limit,
+    );
+    return dispatches;
+  },
+});
+
+export const getUserAgentPushStats = query({
+  args: {
+    consumerUserId: v.string(),
+    agentKey: v.string(),
+  },
+  returns: pushStatsValidator,
+  handler: async (ctx, args) => {
+    return await buildUserAgentPushStats(ctx, args.consumerUserId, args.agentKey);
+  },
+});
+
+export const getUserAgentConversationStats = query({
+  args: {
+    consumerUserId: v.string(),
+    agentKey: v.string(),
+  },
+  returns: conversationStatsValidator,
+  handler: async (ctx, args) => {
+    return await buildUserAgentConversationStats(ctx, args.consumerUserId, args.agentKey);
+  },
+});
+
+export const getUserAgentUsageStats = query({
+  args: {
+    consumerUserId: v.string(),
+    agentKey: v.string(),
+  },
+  returns: usageStatsValidator,
+  handler: async (ctx, args) => {
+    const [pushStats, conversationStats] = await Promise.all([
+      buildUserAgentPushStats(ctx, args.consumerUserId, args.agentKey),
+      buildUserAgentConversationStats(ctx, args.consumerUserId, args.agentKey),
+    ]);
+    return {
+      ...pushStats,
+      ...conversationStats,
+    };
+  },
+});
+
 async function enqueuePushMessage(
   ctx: MutationCtx,
   input: {
@@ -822,7 +1166,97 @@ async function enqueuePushMessage(
   });
 }
 
-async function resolveActiveAgentKeyForUser(ctx: MutationCtx, consumerUserId: string) {
+async function fetchPushJobsForAgent(
+  ctx: QueryCtx | MutationCtx,
+  consumerUserId: string,
+  agentKey: string,
+  includeDisabled = true,
+) {
+  const rows = includeDisabled
+    ? await ctx.db
+        .query("messagePushJobs")
+        .withIndex("by_consumerUserId", (q) => q.eq("consumerUserId", consumerUserId))
+        .collect()
+    : await ctx.db
+        .query("messagePushJobs")
+        .withIndex("by_consumerUserId_and_enabled", (q) =>
+          q.eq("consumerUserId", consumerUserId).eq("enabled", true),
+        )
+        .collect();
+  return rows
+    .filter((row) => row.agentKey === agentKey)
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .map((row) => ({
+      _id: row._id,
+      companyId: row.companyId,
+      consumerUserId: row.consumerUserId,
+      agentKey: row.agentKey ?? null,
+      sourceTemplateId: row.sourceTemplateId ?? null,
+      title: row.title,
+      text: row.text,
+      periodicity: row.periodicity,
+      timezone: row.timezone,
+      schedule: row.schedule,
+      enabled: row.enabled,
+      nextRunAt: row.nextRunAt ?? null,
+      lastRunAt: row.lastRunAt ?? null,
+      lastRunKey: row.lastRunKey ?? null,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    }));
+}
+
+async function fetchPushDispatchesForAgent(
+  ctx: QueryCtx | MutationCtx,
+  consumerUserId: string,
+  agentKey: string,
+  limit?: number,
+) {
+  const jobs = await fetchPushJobsForAgent(ctx, consumerUserId, agentKey, true);
+  const perJobLimit = Math.max(1, Math.min(limit ?? 50, 200));
+  const dispatchGroups = await Promise.all(
+    jobs.map(async (job) => {
+      const rows = await ctx.db
+        .query("messagePushDispatches")
+        .withIndex("by_jobId_and_runKey", (q) => q.eq("jobId", job._id))
+        .take(perJobLimit);
+      return rows.map((row) => ({
+        _id: row._id,
+        jobId: row.jobId,
+        runKey: row.runKey,
+        status: row.status,
+        scheduledFor: row.scheduledFor,
+        createdAt: row.createdAt,
+        error: row.error ?? null,
+      }));
+    }),
+  );
+  return dispatchGroups
+    .flat()
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .slice(0, perJobLimit);
+}
+
+async function getOwnedPushJobForAgent(
+  ctx: MutationCtx,
+  consumerUserId: string,
+  agentKey: string,
+  jobId: Id<"messagePushJobs">,
+) {
+  const job = await ctx.db.get(jobId);
+  if (!job) {
+    return null;
+  }
+  if (job.consumerUserId !== consumerUserId || job.agentKey !== agentKey) {
+    return null;
+  }
+  return job;
+}
+
+async function resolveActiveAgentKeyForUser(
+  ctx: QueryCtx | MutationCtx,
+  consumerUserId: string,
+) {
   const binding = await ctx.db
     .query("identityBindings")
     .withIndex("by_consumerUserId_and_status", (q) =>
@@ -843,7 +1277,7 @@ async function resolveActiveAgentKeyForUser(ctx: MutationCtx, consumerUserId: st
 }
 
 async function resolveConversationTargetForUser(
-  ctx: MutationCtx,
+  ctx: QueryCtx | MutationCtx,
   consumerUserId: string,
 ): Promise<{
   conversationId: string;
@@ -869,6 +1303,68 @@ async function resolveConversationTargetForUser(
   return {
     conversationId: `user:${consumerUserId}`,
     source: "legacy_user",
+  };
+}
+
+async function countQueueItemsForConversationByStatus(
+  ctx: QueryCtx,
+  conversationId: string,
+  status: "queued" | "processing" | "failed" | "dead_letter",
+) {
+  const rows = await ctx.db
+    .query("messageQueue")
+    .withIndex("by_conversationId_and_status", (q) =>
+      q.eq("conversationId", conversationId).eq("status", status),
+    )
+    .collect();
+  return rows.length;
+}
+
+async function buildUserAgentPushStats(
+  ctx: QueryCtx,
+  consumerUserId: string,
+  agentKey: string,
+) {
+  const jobs = await fetchPushJobsForAgent(ctx, consumerUserId, agentKey, true);
+  const dispatches = await fetchPushDispatchesForAgent(ctx, consumerUserId, agentKey, 200);
+  const latestDispatchAt =
+    dispatches.map((dispatch) => dispatch.createdAt).sort((a, b) => b - a)[0] ?? null;
+  return {
+    totalPushJobs: jobs.length,
+    activePushJobs: jobs.filter((job) => job.enabled).length,
+    totalDispatches: dispatches.length,
+    latestDispatchAt,
+  };
+}
+
+async function buildUserAgentConversationStats(
+  ctx: QueryCtx,
+  consumerUserId: string,
+  agentKey: string,
+) {
+  const activeAgentKey = await resolveActiveAgentKeyForUser(ctx, consumerUserId);
+  if (activeAgentKey !== agentKey) {
+    return {
+      contextMessages: 0,
+      queuedMessages: 0,
+      failedMessages: 0,
+    };
+  }
+  const target = await resolveConversationTargetForUser(ctx, consumerUserId);
+  const conversation = await ctx.db
+    .query("conversations")
+    .withIndex("by_conversationId", (q) => q.eq("conversationId", target.conversationId))
+    .unique();
+  const [queued, processing, failed, deadLetter] = await Promise.all([
+    countQueueItemsForConversationByStatus(ctx, target.conversationId, "queued"),
+    countQueueItemsForConversationByStatus(ctx, target.conversationId, "processing"),
+    countQueueItemsForConversationByStatus(ctx, target.conversationId, "failed"),
+    countQueueItemsForConversationByStatus(ctx, target.conversationId, "dead_letter"),
+  ]);
+  return {
+    contextMessages: conversation?.contextHistory.length ?? 0,
+    queuedMessages: queued + processing,
+    failedMessages: failed + deadLetter,
   };
 }
 

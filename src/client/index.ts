@@ -549,6 +549,44 @@ export function exposeApi(
         return await ctx.runQuery(component.lib.getUserAgentBinding, args);
       },
     }),
+    listUserAgents: queryGeneric({
+      args: {
+        consumerUserId: v.string(),
+        includeDisabled: v.optional(v.boolean()),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runQuery((component.lib as any).listUserAgents, args);
+      },
+    }),
+    getUserAgent: queryGeneric({
+      args: {
+        consumerUserId: v.string(),
+        agentKey: v.string(),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runQuery((component.lib as any).getUserAgent, args);
+      },
+    }),
+    getActiveUserAgent: queryGeneric({
+      args: {
+        consumerUserId: v.string(),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runQuery((component.lib as any).getActiveUserAgent, args);
+      },
+    }),
+    getUserAgentsOverview: queryGeneric({
+      args: {
+        consumerUserId: v.string(),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runQuery((component.lib as any).getUserAgentsOverview, args);
+      },
+    }),
     resolveAgentForTelegram: queryGeneric({
       args: {
         telegramUserId: v.optional(v.string()),
@@ -568,6 +606,17 @@ export function exposeApi(
       handler: async (ctx, args) => {
         await options.auth(ctx, { type: "read" });
         return await ctx.runMutation(component.lib.createPairingCode, args);
+      },
+    }),
+    createUserAgentPairing: mutationGeneric({
+      args: {
+        consumerUserId: v.string(),
+        agentKey: v.string(),
+        ttlMs: v.optional(v.number()),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "write", agentKey: args.agentKey });
+        return await ctx.runMutation((component.lib as any).createUserAgentPairing, args);
       },
     }),
     consumePairingCode: mutationGeneric({
@@ -590,6 +639,74 @@ export function exposeApi(
         return await ctx.runQuery(component.lib.getPairingCodeStatus, args);
       },
     }),
+    getUserAgentPairingStatus: queryGeneric({
+      args: {
+        consumerUserId: v.string(),
+        agentKey: v.string(),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runQuery((component.lib as any).getUserAgentPairingStatus, args);
+      },
+    }),
+    importTelegramTokenForAgent: mutationGeneric({
+      args: {
+        consumerUserId: v.string(),
+        agentKey: v.string(),
+        plaintextValue: v.string(),
+        metadata: v.optional(v.record(v.string(), v.string())),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "write", agentKey: args.agentKey });
+        return await ctx.runMutation((component.lib as any).importTelegramTokenForAgent, args);
+      },
+    }),
+    getUserAgentOnboardingState: queryGeneric({
+      args: {
+        consumerUserId: v.string(),
+        agentKey: v.string(),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runQuery((component.lib as any).getUserAgentOnboardingState, args);
+      },
+    }),
+    getRequiredSecretRefs: queryGeneric({
+      args: {
+        agentKey: v.optional(v.string()),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runQuery((component.lib as any).getRequiredSecretRefs, args);
+      },
+    }),
+    getProviderOperationalReadiness: queryGeneric({
+      args: {},
+      handler: async (ctx) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runQuery((component.lib as any).getProviderOperationalReadiness, {});
+      },
+    }),
+    getTelegramAgentReadiness: queryGeneric({
+      args: {
+        consumerUserId: v.string(),
+        agentKey: v.string(),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runQuery((component.lib as any).getTelegramAgentReadiness, args);
+      },
+    }),
+    getAgentOperationalReadiness: queryGeneric({
+      args: {
+        consumerUserId: v.string(),
+        agentKey: v.string(),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runQuery((component.lib as any).getAgentOperationalReadiness, args);
+      },
+    }),
     configureTelegramWebhook: actionGeneric({
       args: {
         convexSiteUrl: v.string(),
@@ -598,6 +715,15 @@ export function exposeApi(
       handler: async (ctx, args) => {
         await options.auth(ctx, { type: "read" });
         return await ctx.runAction(component.lib.configureTelegramWebhook, args);
+      },
+    }),
+    getWebhookReadiness: actionGeneric({
+      args: {
+        agentKey: v.string(),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runAction((component.lib as any).getWebhookReadiness, args);
       },
     }),
     createPushTemplate: mutationGeneric({
@@ -724,6 +850,94 @@ export function exposeApi(
         return await ctx.runQuery((component.lib as any).listPushJobsForUser, args);
       },
     }),
+    listQueueItemsForConversation: queryGeneric({
+      args: {
+        conversationId: v.string(),
+        limit: v.optional(v.number()),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runQuery((component.lib as any).listQueueItemsForConversation, args);
+      },
+    }),
+    listQueueItemsForUserAgent: queryGeneric({
+      args: {
+        consumerUserId: v.string(),
+        agentKey: v.string(),
+        statuses: v.optional(v.array(v.union(
+          v.literal("queued"),
+          v.literal("processing"),
+          v.literal("done"),
+          v.literal("failed"),
+          v.literal("dead_letter"),
+        ))),
+        limit: v.optional(v.number()),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runQuery((component.lib as any).listQueueItemsForUserAgent, args);
+      },
+    }),
+    getConversationViewForUserAgent: queryGeneric({
+      args: {
+        consumerUserId: v.string(),
+        agentKey: v.string(),
+        limit: v.optional(v.number()),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runQuery((component.lib as any).getConversationViewForUserAgent, args);
+      },
+    }),
+    sendMessageToUserAgent: mutationGeneric({
+      args: {
+        consumerUserId: v.string(),
+        agentKey: v.string(),
+        content: v.string(),
+        metadata: v.optional(v.record(v.string(), v.string())),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, {
+          type: "write",
+          agentKey: args.agentKey,
+        });
+        return await ctx.runMutation((component.lib as any).sendMessageToUserAgent, {
+          ...args,
+          providerConfig: options.providerConfig,
+        });
+      },
+    }),
+    listSnapshotsForConversation: queryGeneric({
+      args: {
+        conversationId: v.string(),
+        limit: v.optional(v.number()),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runQuery((component.lib as any).listSnapshotsForConversation, args);
+      },
+    }),
+    listSnapshotsForUserAgent: queryGeneric({
+      args: {
+        consumerUserId: v.string(),
+        agentKey: v.string(),
+        limit: v.optional(v.number()),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runQuery((component.lib as any).listSnapshotsForUserAgent, args);
+      },
+    }),
+    getLatestSnapshotForUserAgent: queryGeneric({
+      args: {
+        consumerUserId: v.string(),
+        agentKey: v.string(),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runQuery((component.lib as any).getLatestSnapshotForUserAgent, args);
+      },
+    }),
     triggerPushJobNow: mutationGeneric({
       args: {
         jobId: v.string(),
@@ -734,6 +948,121 @@ export function exposeApi(
           ...args,
           providerConfig: options.providerConfig,
         });
+      },
+    }),
+    listPushJobsForAgent: queryGeneric({
+      args: {
+        consumerUserId: v.string(),
+        agentKey: v.string(),
+        includeDisabled: v.optional(v.boolean()),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runQuery((component.lib as any).listPushJobsForAgent, args);
+      },
+    }),
+    createPushJobFromTemplateForAgent: mutationGeneric({
+      args: {
+        companyId: v.string(),
+        consumerUserId: v.string(),
+        agentKey: v.string(),
+        templateId: v.string(),
+        timezone: v.string(),
+        schedule: v.optional(pushScheduleValidator),
+        enabled: v.optional(v.boolean()),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "write", agentKey: args.agentKey });
+        return await ctx.runMutation((component.lib as any).createPushJobFromTemplateForAgent, args);
+      },
+    }),
+    createPushJobCustomForAgent: mutationGeneric({
+      args: {
+        companyId: v.string(),
+        consumerUserId: v.string(),
+        agentKey: v.string(),
+        title: v.string(),
+        text: v.string(),
+        periodicity: pushPeriodicityValidator,
+        timezone: v.string(),
+        schedule: pushScheduleValidator,
+        enabled: v.optional(v.boolean()),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "write", agentKey: args.agentKey });
+        return await ctx.runMutation((component.lib as any).createPushJobCustomForAgent, args);
+      },
+    }),
+    updatePushJobForAgent: mutationGeneric({
+      args: {
+        consumerUserId: v.string(),
+        agentKey: v.string(),
+        jobId: v.string(),
+        title: v.optional(v.string()),
+        text: v.optional(v.string()),
+        periodicity: v.optional(pushPeriodicityValidator),
+        timezone: v.optional(v.string()),
+        schedule: v.optional(pushScheduleValidator),
+        enabled: v.optional(v.boolean()),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "write", agentKey: args.agentKey });
+        return await ctx.runMutation((component.lib as any).updatePushJobForAgent, args);
+      },
+    }),
+    triggerPushJobNowForAgent: mutationGeneric({
+      args: {
+        consumerUserId: v.string(),
+        agentKey: v.string(),
+        jobId: v.string(),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "write", agentKey: args.agentKey });
+        return await ctx.runMutation((component.lib as any).triggerPushJobNowForAgent, {
+          ...args,
+          providerConfig: options.providerConfig,
+        });
+      },
+    }),
+    listPushDispatchesForAgent: queryGeneric({
+      args: {
+        consumerUserId: v.string(),
+        agentKey: v.string(),
+        limit: v.optional(v.number()),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runQuery((component.lib as any).listPushDispatchesForAgent, args);
+      },
+    }),
+    getUserAgentPushStats: queryGeneric({
+      args: {
+        consumerUserId: v.string(),
+        agentKey: v.string(),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runQuery((component.lib as any).getUserAgentPushStats, args);
+      },
+    }),
+    getUserAgentConversationStats: queryGeneric({
+      args: {
+        consumerUserId: v.string(),
+        agentKey: v.string(),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runQuery((component.lib as any).getUserAgentConversationStats, args);
+      },
+    }),
+    getUserAgentUsageStats: queryGeneric({
+      args: {
+        consumerUserId: v.string(),
+        agentKey: v.string(),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runQuery((component.lib as any).getUserAgentUsageStats, args);
       },
     }),
     dispatchDuePushJobs: mutationGeneric({
