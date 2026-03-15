@@ -293,9 +293,17 @@ If you use `exposeApi(...)`, the worker contract is available directly on the co
 - `workerComplete`
 - `workerFail`
 
-### Native integration with `agent-bridge` (no consumer glue code)
+### `agent-bridge`: config and secrets for OpenClaw workers
 
-`agent-factory` now exposes a native contract for bridge execution. You only configure profile + secrets in the component.
+`agent-factory` does **not** execute `agent-bridge` tools.
+
+Its role stops at:
+- storing bridge settings on the agent profile
+- resolving bridge secrets from the component secret store
+- exposing `bridgeRuntimeConfig` in hydration
+- forwarding bridge-related env vars to spawned OpenClaw workers
+
+Tool execution belongs to the OpenClaw worker runtime / worker image, not to `agent-factory`.
 
 1) Configure an agent profile with bridge settings:
 
@@ -346,32 +354,8 @@ skills (`APP_BASE_URL_MAP_JSON`).
 
 Hydration includes `bridgeRuntimeConfig` for the worker loop.
 
-3) In worker runtime use built-in helpers from this package:
-
-```ts
-import {
-  maybeExecuteBridgeToolCall,
-  resolveBridgeRuntimeConfig,
-} from "@okrlinkhub/agent-factory";
-
-const resolved = resolveBridgeRuntimeConfig(hydration.bridgeRuntimeConfig);
-if (resolved.ok) {
-  // Optional proactive resolution check
-}
-
-const toolResult = await maybeExecuteBridgeToolCall({
-  toolName: pendingToolCall.toolName,
-  toolArgs,
-  hydratedConfig: hydration.bridgeRuntimeConfig,
-  userToken: maybeUserJwtOrNull,
-});
-```
-
-`maybeExecuteBridgeToolCall` handles:
-- `bridge.<functionKey>` mapping to `POST /agent/execute`
-- strict headers (`X-Agent-Service-Id`, `X-Agent-Service-Key`, `X-Agent-App`)
-- retry for `429` and `5xx`
-- deterministic response object to map back into conversation/tool messages
+Do **not** treat `agent-factory` as the place where `bridge.<functionKey>` tool calls are executed.
+If your OpenClaw agents use `agent-bridge`, that execution flow must live in the worker runtime itself.
 
 Fallback env (worker-side only, used when hydration misses values):
 - `OPENCLAW_AGENT_BRIDGE_BASE_URL` or `AGENT_BRIDGE_BASE_URL`
@@ -381,7 +365,7 @@ Fallback env (worker-side only, used when hydration misses values):
 
 ### Required Fly.io / component secrets for agent-bridge
 
-When `agent-factory` is connected to `agent-bridge`, every spawned worker must receive these three environment variables for bridge execution and user linking to work correctly:
+When `agent-factory` is used together with `agent-bridge`, spawned workers may need these environment variables available in their runtime:
 
 | Env var | Component secret ref | Purpose |
 |---------|----------------------|---------|
@@ -389,7 +373,7 @@ When `agent-factory` is connected to `agent-bridge`, every spawned worker must r
 | `OPENCLAW_SERVICE_KEY` | `agent-bridge.serviceKey` | Service key for bridge auth |
 | `OPENCLAW_LINKING_SHARED_SECRET` | `agent-bridge.linkingSharedSecret` | Shared secret for `execute-on-behalf` user linking |
 
-The scheduler forwards these from the component secret store into each machine's env at spawn time. If any is missing, the worker may fail bridge calls (e.g. `403 delegation_denied` when linking is required).
+The scheduler forwards these from the component secret store into each machine's env at spawn time. These values prepare the worker runtime for bridge usage; they do not implement bridge tool execution inside `agent-factory`.
 
 Import all three into the component secret store:
 
