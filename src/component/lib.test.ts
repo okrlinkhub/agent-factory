@@ -256,6 +256,7 @@ describe("component lib", () => {
       telegramUserId: "tg-user-1",
     });
     expect(byTelegram.agentKey).toBe("agent-a");
+    expect(byTelegram.conversationId).toBe("user-agent:agent-a:u-1");
 
     await t.mutation(api.lib.bindUserAgent, {
       consumerUserId: "u-1",
@@ -279,6 +280,7 @@ describe("component lib", () => {
       telegramChatId: "tg-chat-1",
     });
     expect(afterRevoke.agentKey).toBeNull();
+    expect(afterRevoke.conversationId).toBeNull();
   });
 
   test("worker scheduling should set idle shutdown from last claim time", async () => {
@@ -1742,6 +1744,107 @@ describe("component lib", () => {
     expect(missingConversationSnapshot).toBeNull();
   });
 
+  test("snapshot APIs should reject missing conversationId", async () => {
+    const t = initConvexTest();
+    const nowMs = Date.UTC(2026, 0, 1, 17, 52, 0);
+
+    await expect(
+      t.mutation(api.queue.prepareDataSnapshotUpload as any, {
+        workerId: "worker-snapshot-missing",
+        workspaceId: "default",
+        agentKey: "support-agent",
+        reason: "manual",
+        nowMs,
+      }),
+    ).rejects.toThrow();
+
+    await expect(
+      t.query(api.queue.getLatestDataSnapshotForRestore as any, {
+        workspaceId: "default",
+        agentKey: "support-agent",
+        nowMs,
+      }),
+    ).rejects.toThrow();
+  });
+
+  test("user-agent snapshot listing should stay isolated per conversation", async () => {
+    const t = initConvexTest();
+    const nowMs = Date.UTC(2026, 0, 1, 17, 54, 0);
+
+    await t.mutation(api.queue.upsertAgentProfile, {
+      agentKey: "snapshot-agent",
+      version: "1.0.0",
+      secretsRef: [],
+      enabled: true,
+    });
+
+    await t.mutation(api.lib.bindUserAgent, {
+      consumerUserId: "snapshot-user-a",
+      agentKey: "snapshot-agent",
+      source: "manual",
+    });
+    await t.mutation(api.lib.bindUserAgent, {
+      consumerUserId: "snapshot-user-b",
+      agentKey: "snapshot-agent",
+      source: "manual",
+    });
+
+    const snapshotA = await t.mutation(api.queue.prepareDataSnapshotUpload as any, {
+      workerId: "worker-snapshot-a",
+      workspaceId: "default",
+      agentKey: "snapshot-agent",
+      conversationId: "user-agent:snapshot-agent:snapshot-user-a",
+      reason: "manual",
+      nowMs,
+    });
+    const storageA = await t.run(async (ctx) => {
+      return await ctx.storage.store(new Blob(["snapshot-a"]));
+    });
+    await t.mutation(api.queue.finalizeDataSnapshotUpload as any, {
+      workerId: "worker-snapshot-a",
+      snapshotId: snapshotA.snapshotId,
+      storageId: storageA,
+      sha256: "snapshot-a",
+      sizeBytes: 10,
+      nowMs: nowMs + 1,
+    });
+
+    const snapshotB = await t.mutation(api.queue.prepareDataSnapshotUpload as any, {
+      workerId: "worker-snapshot-b",
+      workspaceId: "default",
+      agentKey: "snapshot-agent",
+      conversationId: "user-agent:snapshot-agent:snapshot-user-b",
+      reason: "manual",
+      nowMs: nowMs + 2,
+    });
+    const storageB = await t.run(async (ctx) => {
+      return await ctx.storage.store(new Blob(["snapshot-b"]));
+    });
+    await t.mutation(api.queue.finalizeDataSnapshotUpload as any, {
+      workerId: "worker-snapshot-b",
+      snapshotId: snapshotB.snapshotId,
+      storageId: storageB,
+      sha256: "snapshot-b",
+      sizeBytes: 10,
+      nowMs: nowMs + 3,
+    });
+
+    const listed = await t.query((api.lib as any).listSnapshotsForUserAgent, {
+      consumerUserId: "snapshot-user-a",
+      agentKey: "snapshot-agent",
+      nowMs: nowMs + 4,
+    });
+    expect(listed).toHaveLength(1);
+    expect(listed[0]?.conversationId).toBe("user-agent:snapshot-agent:snapshot-user-a");
+
+    const latest = await t.query((api.lib as any).getLatestSnapshotForUserAgent, {
+      consumerUserId: "snapshot-user-a",
+      agentKey: "snapshot-agent",
+      nowMs: nowMs + 4,
+    });
+    expect(latest?.conversationId).toBe("user-agent:snapshot-agent:snapshot-user-a");
+  });
+
   test("release stuck jobs should clear worker assignment when the lease is recovered", async () => {
     const t = initConvexTest();
     const nowMs = Date.UTC(2026, 0, 1, 17, 55, 0);
@@ -2155,7 +2258,7 @@ describe("component lib", () => {
     expect(worker?.machineId).toBeNull();
   });
 
-  test("push jobs should dispatch scheduled messages with fallback user conversation id", async () => {
+  test("push jobs should dispatch scheduled messages with a stable user-agent conversation id", async () => {
     const t = initConvexTest();
     await t.mutation(api.queue.upsertAgentProfile, {
       agentKey: "push-agent",
@@ -2195,7 +2298,7 @@ describe("component lib", () => {
     const queueStats = await t.query(api.lib.queueStats, {});
     expect(queueStats.queuedReady).toBe(1);
     const claim = await t.mutation(api.lib.claim, { workerId: "worker-push-fallback-1" });
-    expect(claim?.conversationId).toBe("user:user-push-1");
+    expect(claim?.conversationId).toBe("user-agent:push-agent:user-push-1");
     expect(claim?.payload.provider).toBe("system_push");
     expect(claim?.payload.providerUserId).toBe("user-push-1");
 
@@ -2207,7 +2310,7 @@ describe("component lib", () => {
     expect(jobDispatches[0].status).toBe("enqueued");
   });
 
-  test("triggerPushJobNow should reuse telegram chat conversation id", async () => {
+  test("triggerPushJobNow should keep the stable conversation id after telegram pairing", async () => {
     const t = initConvexTest();
     await t.mutation(api.queue.upsertAgentProfile, {
       agentKey: "push-telegram-manual-agent",
@@ -2243,14 +2346,16 @@ describe("component lib", () => {
     });
 
     const claim = await t.mutation(api.lib.claim, { workerId: "worker-push-telegram-manual-1" });
-    expect(claim?.conversationId).toBe("telegram:8246761447");
+    expect(claim?.conversationId).toBe(
+      "user-agent:push-telegram-manual-agent:user-push-telegram-manual",
+    );
     expect(claim?.payload.provider).toBe("telegram");
     expect(claim?.payload.providerUserId).toBe("tg-user-manual-1");
     expect(claim?.payload.metadata?.telegramChatId).toBe("8246761447");
     expect(claim?.payload.metadata?.telegramUserId).toBe("tg-user-manual-1");
   });
 
-  test("dispatchDuePushJobs should reuse telegram chat conversation id when available", async () => {
+  test("dispatchDuePushJobs should keep the stable conversation id when telegram is available", async () => {
     const t = initConvexTest();
     await t.mutation(api.queue.upsertAgentProfile, {
       agentKey: "push-telegram-scheduled-agent",
@@ -2289,7 +2394,9 @@ describe("component lib", () => {
     expect(dispatch.failed).toBe(0);
 
     const claim = await t.mutation(api.lib.claim, { workerId: "worker-push-telegram-scheduled-1" });
-    expect(claim?.conversationId).toBe("telegram:9988776655");
+    expect(claim?.conversationId).toBe(
+      "user-agent:push-telegram-scheduled-agent:user-push-telegram-scheduled",
+    );
     expect(claim?.payload.provider).toBe("telegram");
     expect(claim?.payload.providerUserId).toBe("tg-user-scheduled-1");
     expect(claim?.payload.metadata?.telegramChatId).toBe("9988776655");

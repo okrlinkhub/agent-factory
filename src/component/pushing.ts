@@ -6,6 +6,10 @@ import type { Id } from "./_generated/dataModel.js";
 import { providerConfigValidator } from "./config.js";
 import type { ProviderConfig } from "./config.js";
 
+function buildUserAgentConversationId(consumerUserId: string, agentKey: string) {
+  return `user-agent:${agentKey}:${consumerUserId}`;
+}
+
 const periodicityValidator = v.union(
   v.literal("manual"),
   v.literal("daily"),
@@ -1292,16 +1296,19 @@ async function resolveConversationTargetForUser(
     )
     .first();
   const telegramChatId = binding?.telegramChatId?.trim();
+  const conversationId =
+    binding?.conversationId?.trim() ||
+    buildUserAgentConversationId(consumerUserId, binding?.agentKey ?? "default");
   if (telegramChatId && telegramChatId.length > 0) {
     return {
-      conversationId: `telegram:${telegramChatId}`,
+      conversationId,
       source: "telegram_chat",
       telegramChatId,
       telegramUserId: binding?.telegramUserId?.trim() || undefined,
     };
   }
   return {
-    conversationId: `user:${consumerUserId}`,
+    conversationId,
     source: "legacy_user",
   };
 }

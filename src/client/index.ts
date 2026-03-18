@@ -287,7 +287,7 @@ export function exposeApi(
         workerId: v.string(),
         workspaceId: v.string(),
         agentKey: v.string(),
-        conversationId: v.optional(v.string()),
+        conversationId: v.string(),
         reason: v.union(v.literal("drain"), v.literal("signal"), v.literal("manual")),
       },
       handler: async (ctx, args) => {
@@ -323,7 +323,7 @@ export function exposeApi(
       args: {
         workspaceId: v.string(),
         agentKey: v.string(),
-        conversationId: v.optional(v.string()),
+        conversationId: v.string(),
       },
       handler: async (ctx, args) => {
         await options.auth(ctx, { type: "read" });
@@ -1219,12 +1219,17 @@ export function registerRoutes(
         );
       }
 
-      const mapped = resolveAgentKeyFromBinding
+      const mappedRaw = resolveAgentKeyFromBinding
         ? await ctx.runQuery(component.lib.resolveAgentForTelegram, {
             telegramUserId,
             telegramChatId,
           })
-        : { consumerUserId: null, agentKey: null };
+        : { consumerUserId: null, agentKey: null, conversationId: null };
+      const mapped = {
+        consumerUserId: mappedRaw.consumerUserId,
+        agentKey: mappedRaw.agentKey,
+        conversationId: "conversationId" in mappedRaw ? mappedRaw.conversationId : null,
+      };
       const configuredAgentKey = resolveAgentKey ? resolveAgentKey(update) : null;
       const agentKey = configuredAgentKey ?? mapped.agentKey ?? fallbackAgentKey;
       if (!agentKey || (requireBindingForTelegram && !configuredAgentKey && !mapped.agentKey)) {
@@ -1284,7 +1289,7 @@ export function registerRoutes(
         metadata.telegramVideoFileId = message.video.file_id;
       }
       await ctx.runMutation(component.lib.enqueue, {
-        conversationId: `telegram:${telegramChatId}`,
+        conversationId: mapped.conversationId ?? `telegram:${telegramChatId}`,
         agentKey,
         payload: {
           provider: "telegram",

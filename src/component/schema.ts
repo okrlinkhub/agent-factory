@@ -161,7 +161,7 @@ export default defineSchema({
     workspaceId: v.string(),
     agentKey: v.string(),
     workerId: v.string(),
-    conversationId: v.optional(v.string()),
+    conversationId: v.string(),
     reason: v.union(v.literal("drain"), v.literal("signal"), v.literal("manual")),
     formatVersion: v.number(),
     archiveFileId: v.optional(v.id("_storage")),
@@ -180,6 +180,12 @@ export default defineSchema({
   })
     .index("by_workerId_and_createdAt", ["workerId", "createdAt"])
     .index("by_workspaceId_and_agentKey_and_createdAt", ["workspaceId", "agentKey", "createdAt"])
+    .index("by_workspaceId_and_agentKey_and_conversationId_and_createdAt", [
+      "workspaceId",
+      "agentKey",
+      "conversationId",
+      "createdAt",
+    ])
     .index("by_agentKey_and_createdAt", ["agentKey", "createdAt"])
     .index("by_conversationId_and_createdAt", ["conversationId", "createdAt"])
     .index("by_status_and_expiresAt", ["status", "expiresAt"]),
@@ -201,6 +207,7 @@ export default defineSchema({
   identityBindings: defineTable({
     consumerUserId: v.string(),
     agentKey: v.string(),
+    conversationId: v.string(),
     status: v.union(v.literal("active"), v.literal("revoked")),
     source: v.union(
       v.literal("manual"),

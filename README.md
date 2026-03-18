@@ -67,6 +67,39 @@ crons.interval(
 export default crons;
 ```
 
+## Upgrade to 2.0.0
+
+Version `2.0.0` introduces a **conversation identity breaking change**.
+
+What changed:
+- `conversationId` is now required for worker snapshot upload and restore APIs.
+- `dataSnapshots.conversationId` is now mandatory in persisted storage.
+- Snapshot restore no longer falls back to the latest archive for `workspaceId + agentKey`.
+- User-agent flows now use a stable conversation identity scoped to `consumerUserId + agentKey`.
+- Telegram pairing no longer changes the conversation lineage used for chat history and snapshots.
+
+Important warnings:
+- This release is intentionally **not backward compatible** with legacy snapshots created without `conversationId`.
+- Existing non-prod agents, snapshots, bindings, and conversations created with the old model should be deleted before rollout.
+- If a worker runtime or consumer app still calls snapshot APIs without `conversationId`, the call will now fail at validation time.
+- If your integration assumed conversation IDs like `telegram:<chatId>` or `user:<consumerUserId>` for user-agent flows, you must update it to treat `conversationId` as an opaque stable identifier.
+- If you have custom dashboards, scripts, or admin tools that query snapshots only by `agentKey`, they must be updated to scope by `workspaceId + agentKey + conversationId`.
+
+Quick upgrade checklist:
+1. Delete legacy non-production agents, snapshots, conversations, and identity bindings created before this release.
+2. Upgrade the package to `2.0.0`.
+3. Regenerate Convex bindings in the consumer app.
+4. Redeploy all worker runtimes and make sure they always pass `conversationId` to snapshot upload/restore APIs.
+5. Update any custom integrations that assumed user-agent conversation IDs were derived from Telegram chat IDs.
+6. Verify that snapshot restore returns data only for the exact `workspaceId + agentKey + conversationId` tuple.
+7. Smoke-test one manual user-agent flow, one Telegram-paired flow, and one worker snapshot restore flow before wider rollout.
+
+Recommended release notes to communicate to consumers:
+- treat this as a major upgrade, not a safe drop-in patch;
+- start from a clean non-prod environment;
+- roll out workers and consumer app together;
+- do not reuse legacy archives generated before `conversationId` became mandatory.
+
 ## Usage
 
 ### User-facing agent APIs
@@ -102,6 +135,10 @@ Core APIs added for this pattern:
 - `getUserAgentUsageStats`
 - `listSnapshotsForUserAgent`
 - `getLatestSnapshotForUserAgent`
+
+For user-agent flows, the component now treats `conversationId` as a stable identity scoped to
+`consumerUserId + agentKey`, so Telegram pairing changes do not move the chat to a different
+conversation history or snapshot lineage.
 
 Minimal consumer example:
 
@@ -214,6 +251,10 @@ After enqueue, a **queue processor runtime** must process the queue by calling:
 - `components.agentFactory.lib.getHydrationBundle`
 - `components.agentFactory.lib.heartbeat`
 - `components.agentFactory.lib.complete` or `components.agentFactory.lib.fail`
+
+When workers create or restore filesystem snapshots, `conversationId` must always be passed
+explicitly alongside `workspaceId` and `agentKey`; the component no longer supports snapshot
+fallbacks that select the latest archive for an agent without matching the conversation.
 
 Worker autoscaling reconcile now follows a hybrid model:
 - `enqueue` schedules an immediate async reconcile trigger (`runAfter(0, ...)`)

@@ -25,6 +25,7 @@ const userAgentStatusValidator = v.union(
 const bindingViewValidator = v.object({
   consumerUserId: v.string(),
   agentKey: v.string(),
+  conversationId: v.string(),
   status: bindingStatusValidator,
   source: bindingSourceValidator,
   telegramUserId: v.union(v.null(), v.string()),
@@ -447,12 +448,14 @@ export const resolveAgentForTelegram = query({
   returns: v.object({
     consumerUserId: v.union(v.null(), v.string()),
     agentKey: v.union(v.null(), v.string()),
+    conversationId: v.union(v.null(), v.string()),
   }),
   handler: async (ctx, args) => {
     let active:
       | {
           consumerUserId: string;
           agentKey: string;
+          conversationId: string;
         }
       | null = null;
 
@@ -467,6 +470,7 @@ export const resolveAgentForTelegram = query({
         active = {
           consumerUserId: byUser.consumerUserId,
           agentKey: byUser.agentKey,
+          conversationId: byUser.conversationId,
         };
       }
     }
@@ -482,6 +486,7 @@ export const resolveAgentForTelegram = query({
         active = {
           consumerUserId: byChat.consumerUserId,
           agentKey: byChat.agentKey,
+          conversationId: byChat.conversationId,
         };
       }
     }
@@ -489,6 +494,7 @@ export const resolveAgentForTelegram = query({
     return {
       consumerUserId: active?.consumerUserId ?? null,
       agentKey: active?.agentKey ?? null,
+      conversationId: active?.conversationId ?? null,
     };
   },
 });
@@ -511,6 +517,7 @@ export const getUserAgentBinding = query({
     return {
       consumerUserId: active.consumerUserId,
       agentKey: active.agentKey,
+      conversationId: active.conversationId,
       status: active.status,
       source: active.source,
       telegramUserId: active.telegramUserId ?? null,
@@ -934,19 +941,24 @@ function deriveDisplayName(binding: { metadata?: Record<string, string> } | null
   return value && value.length > 0 ? value : null;
 }
 
+function buildUserAgentConversationId(consumerUserId: string, agentKey: string) {
+  return `user-agent:${agentKey}:${consumerUserId}`;
+}
+
 function deriveConversationId(
   binding:
     | {
-        telegramChatId?: string;
+        conversationId?: string;
       }
     | null,
   consumerUserId: string,
+  agentKey: string,
 ) {
-  const telegramChatId = binding?.telegramChatId?.trim();
-  if (telegramChatId) {
-    return `telegram:${telegramChatId}`;
+  const conversationId = binding?.conversationId?.trim();
+  if (conversationId) {
+    return conversationId;
   }
-  return `user:${consumerUserId}`;
+  return buildUserAgentConversationId(consumerUserId, agentKey);
 }
 
 function deriveUserAgentStatus(input: {
@@ -1011,7 +1023,7 @@ async function buildUserAgentDetails(
     displayName,
     version: profile?.version ?? null,
     status,
-    conversationId: deriveConversationId(latestBinding, consumerUserId),
+    conversationId: deriveConversationId(latestBinding, consumerUserId, agentKey),
   };
 }
 
@@ -1372,6 +1384,7 @@ async function upsertBinding(
   const bindingId = await ctx.db.insert("identityBindings", {
     consumerUserId: args.consumerUserId,
     agentKey: args.agentKey,
+    conversationId: buildUserAgentConversationId(args.consumerUserId, args.agentKey),
     status: "active",
     source: args.source ?? "api",
     telegramUserId: args.telegramUserId,
@@ -1388,6 +1401,7 @@ async function upsertBinding(
   return {
     consumerUserId: created.consumerUserId,
     agentKey: created.agentKey,
+    conversationId: created.conversationId,
     status: created.status,
     source: created.source,
     telegramUserId: created.telegramUserId ?? null,

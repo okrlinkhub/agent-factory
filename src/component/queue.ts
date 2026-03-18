@@ -40,6 +40,11 @@ const snapshotReasonValidator = v.union(
   v.literal("manual"),
 );
 const DATA_SNAPSHOT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const DEFAULT_WORKSPACE_ID = "default";
+
+function buildUserAgentConversationId(consumerUserId: string, agentKey: string) {
+  return `user-agent:${agentKey}:${consumerUserId}`;
+}
 
 const claimedJobValidator = v.object({
   messageId: v.id("messageQueue"),
@@ -109,7 +114,7 @@ const snapshotViewValidator = v.object({
     v.literal("failed"),
     v.literal("expired"),
   ),
-  conversationId: v.union(v.null(), v.string()),
+  conversationId: v.string(),
 });
 
 const workerAssignmentValidator = v.object({
@@ -1930,7 +1935,7 @@ export const listSnapshotsForConversation = query({
             ? ((await ctx.storage.getUrl(row.archiveFileId)) ?? null)
             : null,
         status: row.status,
-        conversationId: row.conversationId ?? null,
+        conversationId: row.conversationId,
       })),
     );
   },
@@ -1945,38 +1950,7 @@ export const listSnapshotsForUserAgent = query({
   },
   returns: v.array(snapshotViewValidator),
   handler: async (ctx, args) => {
-    const target = await resolveConversationTargetForUserAgent(
-      ctx,
-      args.consumerUserId,
-      args.agentKey,
-    );
-    const limit = Math.max(1, Math.min(args.limit ?? 50, 200));
-    const nowMs = args.nowMs ?? Date.now();
-    const rows = await ctx.db
-      .query("dataSnapshots")
-      .withIndex("by_agentKey_and_createdAt", (q) => q.eq("agentKey", args.agentKey))
-      .order("desc")
-      .take(limit * 3);
-    const filtered = rows
-      .filter(
-        (row) =>
-          row.conversationId === undefined || row.conversationId === target.conversationId,
-      )
-      .slice(0, limit);
-    return await Promise.all(
-      filtered.map(async (row) => ({
-        snapshotId: row._id,
-        createdAt: row.createdAt,
-        sizeBytes: row.sizeBytes ?? null,
-        sha256: row.sha256 ?? null,
-        downloadUrl:
-          row.archiveFileId !== undefined && row.status === "ready" && row.expiresAt > nowMs
-            ? ((await ctx.storage.getUrl(row.archiveFileId)) ?? null)
-            : null,
-        status: row.status,
-        conversationId: row.conversationId ?? null,
-      })),
-    );
+    return await fetchSnapshotsForUserAgent(ctx, args);
   },
 });
 
@@ -2256,7 +2230,7 @@ export const prepareDataSnapshotUpload = mutation({
     workerId: v.string(),
     workspaceId: v.string(),
     agentKey: v.string(),
-    conversationId: v.optional(v.string()),
+    conversationId: v.string(),
     reason: snapshotReasonValidator,
     nowMs: v.optional(v.number()),
   },
@@ -2346,7 +2320,7 @@ export const getLatestDataSnapshotForRestore = query({
   args: {
     workspaceId: v.string(),
     agentKey: v.string(),
-    conversationId: v.optional(v.string()),
+    conversationId: v.string(),
     nowMs: v.optional(v.number()),
   },
   returns: v.union(
@@ -2361,22 +2335,23 @@ export const getLatestDataSnapshotForRestore = query({
   ),
   handler: async (ctx, args) => {
     const nowMs = args.nowMs ?? Date.now();
-    const candidates = await ctx.db
+    const preferred = await ctx.db
       .query("dataSnapshots")
-      .withIndex("by_workspaceId_and_agentKey_and_createdAt", (q) =>
-        q.eq("workspaceId", args.workspaceId).eq("agentKey", args.agentKey),
+      .withIndex("by_workspaceId_and_agentKey_and_conversationId_and_createdAt", (q) =>
+        q.eq("workspaceId", args.workspaceId)
+          .eq("agentKey", args.agentKey)
+          .eq("conversationId", args.conversationId),
       )
       .order("desc")
-      .take(50);
-    const ready = candidates.filter(
-      (snapshot) =>
-        snapshot.status === "ready" &&
-        snapshot.archiveFileId !== undefined &&
-        snapshot.expiresAt > nowMs,
-    );
-    const preferred = args.conversationId
-      ? ready.find((snapshot) => snapshot.conversationId === args.conversationId)
-      : ready[0];
+      .first();
+    if (
+      !preferred ||
+      preferred.status !== "ready" ||
+      preferred.archiveFileId === undefined ||
+      preferred.expiresAt <= nowMs
+    ) {
+      return null;
+    }
     if (!preferred || !preferred.archiveFileId) return null;
     const downloadUrl = await ctx.storage.getUrl(preferred.archiveFileId);
     if (!downloadUrl) return null;
@@ -2773,16 +2748,19 @@ async function resolveConversationTargetForUserAgent(
   }
   const telegramChatId = latestBinding?.telegramChatId?.trim() || null;
   const telegramUserId = latestBinding?.telegramUserId?.trim() || null;
+  const conversationId =
+    latestBinding?.conversationId?.trim() ||
+    buildUserAgentConversationId(consumerUserId, agentKey);
   if (telegramChatId) {
     return {
-      conversationId: `telegram:${telegramChatId}`,
+      conversationId,
       provider: "telegram",
       telegramChatId,
       telegramUserId,
     };
   }
   return {
-    conversationId: `user:${consumerUserId}`,
+    conversationId,
     provider: "system_push",
     telegramChatId: null,
     telegramUserId: null,
@@ -2798,7 +2776,7 @@ async function buildSnapshotView(
     sizeBytes?: number;
     sha256?: string;
     status: "uploading" | "ready" | "failed" | "expired";
-    conversationId?: string;
+    conversationId: string;
     expiresAt: number;
   },
   nowMs: number,
@@ -2813,7 +2791,7 @@ async function buildSnapshotView(
         ? ((await ctx.storage.getUrl(row.archiveFileId)) ?? null)
         : null,
     status: row.status,
-    conversationId: row.conversationId ?? null,
+    conversationId: row.conversationId,
   };
 }
 
@@ -2835,15 +2813,14 @@ async function fetchSnapshotsForUserAgent(
   const nowMs = args.nowMs ?? Date.now();
   const rows = await ctx.db
     .query("dataSnapshots")
-    .withIndex("by_agentKey_and_createdAt", (q) => q.eq("agentKey", args.agentKey))
-    .order("desc")
-    .take(limit * 3);
-  const filtered = rows
-    .filter(
-      (row) => row.conversationId === undefined || row.conversationId === target.conversationId,
+    .withIndex("by_workspaceId_and_agentKey_and_conversationId_and_createdAt", (q) =>
+      q.eq("workspaceId", DEFAULT_WORKSPACE_ID)
+        .eq("agentKey", args.agentKey)
+        .eq("conversationId", target.conversationId),
     )
-    .slice(0, limit);
-  return await Promise.all(filtered.map((row) => buildSnapshotView(ctx, row, nowMs)));
+    .order("desc")
+    .take(limit);
+  return await Promise.all(rows.map((row) => buildSnapshotView(ctx, row, nowMs)));
 }
 
 async function scheduleIdleShutdownWatchdog(
