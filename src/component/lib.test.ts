@@ -201,6 +201,138 @@ describe("component lib", () => {
     expect(claim?.payload.messageText).toBe("hello");
   });
 
+  test("message runtime config should store telegram attachment retention", async () => {
+    const t = initConvexTest();
+    await t.mutation(api.lib.setMessageRuntimeConfig, {
+      messageConfig: {
+        telegramAttachmentRetentionMs: 60_000,
+      },
+    });
+
+    const storedMessageConfig = await t.query(api.lib.messageRuntimeConfig, {});
+    expect(storedMessageConfig).toEqual({
+      telegramAttachmentRetentionMs: 60_000,
+    });
+  });
+
+  test("enqueue should persist telegram attachments for claimed jobs", async () => {
+    const t = initConvexTest();
+    const nowMs = Date.UTC(2026, 0, 1, 9, 0, 0);
+    vi.setSystemTime(nowMs);
+    await t.mutation(api.queue.upsertAgentProfile, {
+      agentKey: "attachment-agent",
+      version: "1.0.0",
+      secretsRef: [],
+      enabled: true,
+    });
+    const storageId = await t.run(async (ctx) => {
+      return await ctx.storage.store(new Blob(["photo-binary"], { type: "image/jpeg" }));
+    });
+
+    const messageId = await t.mutation(api.lib.enqueue, {
+      conversationId: "telegram:chat:attachment",
+      agentKey: "attachment-agent",
+      payload: {
+        provider: "telegram",
+        providerUserId: "u-attachment-1",
+        messageText: "[telegram media] photo message",
+        attachments: [
+          {
+            kind: "photo",
+            status: "ready",
+            storageId,
+            telegramFileId: "telegram-photo-1",
+            mimeType: "image/jpeg",
+            sizeBytes: 12,
+            expiresAt: nowMs + 60_000,
+          },
+        ],
+      },
+      nowMs,
+    });
+
+    const claim = await t.mutation(api.lib.claim, {
+      workerId: "worker-attachment-1",
+      nowMs,
+    });
+    expect(claim?.messageId).toBe(messageId);
+    expect(claim?.payload.attachments).toHaveLength(1);
+    expect(claim?.payload.attachments?.[0]?.telegramFileId).toBe("telegram-photo-1");
+
+    const bundle = await t.query(api.lib.getHydrationBundle, {
+      messageId,
+      workspaceId: "default",
+    });
+    expect(bundle?.payload.attachments).toHaveLength(1);
+    expect(bundle?.payload.attachments?.[0]?.storageId).toBe(storageId);
+
+    const attachmentRows = await t.run(async (ctx) => {
+      return await ctx.db
+        .query("messageAttachments")
+        .withIndex("by_messageId", (q) => q.eq("messageId", messageId))
+        .collect();
+    });
+    expect(attachmentRows).toHaveLength(1);
+    expect(attachmentRows[0]?.status).toBe("ready");
+  });
+
+  test("expireOldTelegramAttachments should expire stored attachments and queued payloads", async () => {
+    const t = initConvexTest();
+    const nowMs = Date.UTC(2026, 0, 1, 10, 0, 0);
+    vi.setSystemTime(nowMs);
+    await t.mutation(api.queue.upsertAgentProfile, {
+      agentKey: "attachment-expiry-agent",
+      version: "1.0.0",
+      secretsRef: [],
+      enabled: true,
+    });
+    const storageId = await t.run(async (ctx) => {
+      return await ctx.storage.store(new Blob(["document-binary"], { type: "application/pdf" }));
+    });
+
+    const messageId = await t.mutation(api.queue.enqueueMessage, {
+      conversationId: "telegram:chat:attachment-expiry",
+      agentKey: "attachment-expiry-agent",
+      payload: {
+        provider: "telegram",
+        providerUserId: "u-attachment-expiry-1",
+        messageText: "[telegram media] document message",
+        attachments: [
+          {
+            kind: "document",
+            status: "ready",
+            storageId,
+            telegramFileId: "telegram-document-1",
+            fileName: "brief.pdf",
+            mimeType: "application/pdf",
+            sizeBytes: 15,
+            expiresAt: nowMs + 10,
+          },
+        ],
+      },
+      nowMs,
+    });
+
+    const expired = await t.mutation((internal.queue as any).expireOldTelegramAttachments, {
+      nowMs: nowMs + 11,
+      limit: 10,
+    });
+    expect(expired).toBe(1);
+
+    const attachmentRows = await t.run(async (ctx) => {
+      return await ctx.db
+        .query("messageAttachments")
+        .withIndex("by_messageId", (q) => q.eq("messageId", messageId))
+        .collect();
+    });
+    expect(attachmentRows[0]?.status).toBe("expired");
+
+    const messageRow = await t.run(async (ctx) => {
+      return await ctx.db.get(messageId);
+    });
+    expect(messageRow?.payload.attachments?.[0]?.status).toBe("expired");
+  });
+
   test("enqueue should fail when providerUserId is blank in payload", async () => {
     const t = initConvexTest();
     await t.mutation(api.queue.upsertAgentProfile, {

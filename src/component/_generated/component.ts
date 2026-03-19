@@ -40,6 +40,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           agentKey: string;
           boundAt: number;
           consumerUserId: string;
+          conversationId: string;
           metadata: null | Record<string, string>;
           revokedAt: null | number;
           source: "manual" | "telegram_pairing" | "api";
@@ -247,6 +248,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           agentKey: string;
           boundAt: number;
           consumerUserId: string;
+          conversationId: string;
           metadata: null | Record<string, string>;
           revokedAt: null | number;
           source: "manual" | "telegram_pairing" | "api";
@@ -372,7 +374,11 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "query",
         "internal",
         { telegramChatId?: string; telegramUserId?: string },
-        { agentKey: null | string; consumerUserId: null | string },
+        {
+          agentKey: null | string;
+          consumerUserId: null | string;
+          conversationId: null | string;
+        },
         Name
       >;
       resolveAgentForUser: FunctionReference<
@@ -430,6 +436,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           agentKey: string;
           boundAt: number;
           consumerUserId: string;
+          conversationId: string;
           metadata: null | Record<string, string>;
           revokedAt: null | number;
           source: "manual" | "telegram_pairing" | "api";
@@ -475,6 +482,16 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           leaseId: string;
           messageId: string;
           payload: {
+            attachments?: Array<{
+              expiresAt: number;
+              fileName?: string;
+              kind: "photo" | "video" | "audio" | "voice" | "document";
+              mimeType?: string;
+              sizeBytes?: number;
+              status: "ready" | "expired";
+              storageId: string;
+              telegramFileId: string;
+            }>;
             externalMessageId?: string;
             messageText: string;
             metadata?: Record<string, string>;
@@ -765,6 +782,16 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           maxAttempts?: number;
           nowMs?: number;
           payload: {
+            attachments?: Array<{
+              expiresAt: number;
+              fileName?: string;
+              kind: "photo" | "video" | "audio" | "voice" | "document";
+              mimeType?: string;
+              sizeBytes?: number;
+              status: "ready" | "expired";
+              storageId: string;
+              telegramFileId: string;
+            }>;
             externalMessageId?: string;
             messageText: string;
             metadata?: Record<string, string>;
@@ -886,6 +913,16 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             lastError: null | string;
             maxAttempts: number;
             payload: {
+              attachments?: Array<{
+                expiresAt: number;
+                fileName?: string;
+                kind: "photo" | "video" | "audio" | "voice" | "document";
+                mimeType?: string;
+                sizeBytes?: number;
+                status: "ready" | "expired";
+                storageId: string;
+                telegramFileId: string;
+              }>;
               externalMessageId?: string;
               messageText: string;
               metadata?: Record<string, string>;
@@ -929,6 +966,16 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           };
           messageId: string;
           payload: {
+            attachments?: Array<{
+              expiresAt: number;
+              fileName?: string;
+              kind: "photo" | "video" | "audio" | "voice" | "document";
+              mimeType?: string;
+              sizeBytes?: number;
+              status: "ready" | "expired";
+              storageId: string;
+              telegramFileId: string;
+            }>;
             externalMessageId?: string;
             messageText: string;
             metadata?: Record<string, string>;
@@ -945,7 +992,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "internal",
         { agentKey: string; consumerUserId: string; nowMs?: number },
         null | {
-          conversationId: null | string;
+          conversationId: string;
           createdAt: number;
           downloadUrl: null | string;
           sha256: null | string;
@@ -1040,6 +1087,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           agentKey: string;
           boundAt: number;
           consumerUserId: string;
+          conversationId: string;
           metadata: null | Record<string, string>;
           revokedAt: null | number;
           source: "manual" | "telegram_pairing" | "api";
@@ -1323,6 +1371,16 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           lastError: null | string;
           maxAttempts: number;
           payload: {
+            attachments?: Array<{
+              expiresAt: number;
+              fileName?: string;
+              kind: "photo" | "video" | "audio" | "voice" | "document";
+              mimeType?: string;
+              sizeBytes?: number;
+              status: "ready" | "expired";
+              storageId: string;
+              telegramFileId: string;
+            }>;
             externalMessageId?: string;
             messageText: string;
             metadata?: Record<string, string>;
@@ -1356,6 +1414,16 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           lastError: null | string;
           maxAttempts: number;
           payload: {
+            attachments?: Array<{
+              expiresAt: number;
+              fileName?: string;
+              kind: "photo" | "video" | "audio" | "voice" | "document";
+              mimeType?: string;
+              sizeBytes?: number;
+              status: "ready" | "expired";
+              storageId: string;
+              telegramFileId: string;
+            }>;
             externalMessageId?: string;
             messageText: string;
             metadata?: Record<string, string>;
@@ -1374,7 +1442,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "internal",
         { conversationId: string; limit?: number; nowMs?: number },
         Array<{
-          conversationId: null | string;
+          conversationId: string;
           createdAt: number;
           downloadUrl: null | string;
           sha256: null | string;
@@ -1394,7 +1462,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           nowMs?: number;
         },
         Array<{
-          conversationId: null | string;
+          conversationId: string;
           createdAt: number;
           downloadUrl: null | string;
           sha256: null | string;
@@ -1429,7 +1497,10 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "query",
         "internal",
         {},
-        null | { systemPrompt?: string },
+        null | {
+          systemPrompt?: string;
+          telegramAttachmentRetentionMs?: number;
+        },
         Name
       >;
       providerRuntimeConfig: FunctionReference<
@@ -1495,7 +1566,11 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "query",
         "internal",
         { telegramChatId?: string; telegramUserId?: string },
-        { agentKey: null | string; consumerUserId: null | string },
+        {
+          agentKey: null | string;
+          consumerUserId: null | string;
+          conversationId: null | string;
+        },
         Name
       >;
       resolveAgentForUser: FunctionReference<
@@ -1577,7 +1652,13 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       setMessageRuntimeConfig: FunctionReference<
         "mutation",
         "internal",
-        { messageConfig: { systemPrompt?: string }; nowMs?: number },
+        {
+          messageConfig: {
+            systemPrompt?: string;
+            telegramAttachmentRetentionMs?: number;
+          };
+          nowMs?: number;
+        },
         null,
         Name
       >;
@@ -2201,6 +2282,16 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           leaseId: string;
           messageId: string;
           payload: {
+            attachments?: Array<{
+              expiresAt: number;
+              fileName?: string;
+              kind: "photo" | "video" | "audio" | "voice" | "document";
+              mimeType?: string;
+              sizeBytes?: number;
+              status: "ready" | "expired";
+              storageId: string;
+              telegramFileId: string;
+            }>;
             externalMessageId?: string;
             messageText: string;
             metadata?: Record<string, string>;
@@ -2280,6 +2371,16 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           maxAttempts?: number;
           nowMs?: number;
           payload: {
+            attachments?: Array<{
+              expiresAt: number;
+              fileName?: string;
+              kind: "photo" | "video" | "audio" | "voice" | "document";
+              mimeType?: string;
+              sizeBytes?: number;
+              status: "ready" | "expired";
+              storageId: string;
+              telegramFileId: string;
+            }>;
             externalMessageId?: string;
             messageText: string;
             metadata?: Record<string, string>;
@@ -2387,6 +2488,16 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             lastError: null | string;
             maxAttempts: number;
             payload: {
+              attachments?: Array<{
+                expiresAt: number;
+                fileName?: string;
+                kind: "photo" | "video" | "audio" | "voice" | "document";
+                mimeType?: string;
+                sizeBytes?: number;
+                status: "ready" | "expired";
+                storageId: string;
+                telegramFileId: string;
+              }>;
               externalMessageId?: string;
               messageText: string;
               metadata?: Record<string, string>;
@@ -2430,6 +2541,16 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           };
           messageId: string;
           payload: {
+            attachments?: Array<{
+              expiresAt: number;
+              fileName?: string;
+              kind: "photo" | "video" | "audio" | "voice" | "document";
+              mimeType?: string;
+              sizeBytes?: number;
+              status: "ready" | "expired";
+              storageId: string;
+              telegramFileId: string;
+            }>;
             externalMessageId?: string;
             messageText: string;
             metadata?: Record<string, string>;
@@ -2446,7 +2567,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "internal",
         {
           agentKey: string;
-          conversationId?: string;
+          conversationId: string;
           nowMs?: number;
           workspaceId: string;
         },
@@ -2464,7 +2585,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "internal",
         { agentKey: string; consumerUserId: string; nowMs?: number },
         null | {
-          conversationId: null | string;
+          conversationId: string;
           createdAt: number;
           downloadUrl: null | string;
           sha256: null | string;
@@ -2643,6 +2764,16 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           lastError: null | string;
           maxAttempts: number;
           payload: {
+            attachments?: Array<{
+              expiresAt: number;
+              fileName?: string;
+              kind: "photo" | "video" | "audio" | "voice" | "document";
+              mimeType?: string;
+              sizeBytes?: number;
+              status: "ready" | "expired";
+              storageId: string;
+              telegramFileId: string;
+            }>;
             externalMessageId?: string;
             messageText: string;
             metadata?: Record<string, string>;
@@ -2676,6 +2807,16 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           lastError: null | string;
           maxAttempts: number;
           payload: {
+            attachments?: Array<{
+              expiresAt: number;
+              fileName?: string;
+              kind: "photo" | "video" | "audio" | "voice" | "document";
+              mimeType?: string;
+              sizeBytes?: number;
+              status: "ready" | "expired";
+              storageId: string;
+              telegramFileId: string;
+            }>;
             externalMessageId?: string;
             messageText: string;
             metadata?: Record<string, string>;
@@ -2694,7 +2835,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "internal",
         { conversationId: string; limit?: number; nowMs?: number },
         Array<{
-          conversationId: null | string;
+          conversationId: string;
           createdAt: number;
           downloadUrl: null | string;
           sha256: null | string;
@@ -2714,7 +2855,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           nowMs?: number;
         },
         Array<{
-          conversationId: null | string;
+          conversationId: string;
           createdAt: number;
           downloadUrl: null | string;
           sha256: null | string;
@@ -2728,7 +2869,10 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "query",
         "internal",
         {},
-        null | { systemPrompt?: string },
+        null | {
+          systemPrompt?: string;
+          telegramAttachmentRetentionMs?: number;
+        },
         Name
       >;
       prepareDataSnapshotUpload: FunctionReference<
@@ -2736,7 +2880,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "internal",
         {
           agentKey: string;
-          conversationId?: string;
+          conversationId: string;
           nowMs?: number;
           reason: "drain" | "signal" | "manual";
           workerId: string;
@@ -2806,7 +2950,13 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       setMessageRuntimeConfig: FunctionReference<
         "mutation",
         "internal",
-        { messageConfig: { systemPrompt?: string }; nowMs?: number },
+        {
+          messageConfig: {
+            systemPrompt?: string;
+            telegramAttachmentRetentionMs?: number;
+          };
+          nowMs?: number;
+        },
         null,
         Name
       >;

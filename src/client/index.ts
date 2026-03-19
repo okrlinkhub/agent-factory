@@ -4,7 +4,7 @@ import {
   mutationGeneric,
   queryGeneric,
 } from "convex/server";
-import type { Auth, HttpRouter } from "convex/server";
+import type { Auth, GenericActionCtx, GenericDataModel, HttpRouter } from "convex/server";
 import { v } from "convex/values";
 import type { ComponentApi } from "../component/_generated/component.js";
 import {
@@ -12,6 +12,25 @@ import {
   scalingPolicyValidator,
   type ProviderConfig,
 } from "../component/config.js";
+
+const telegramAttachmentKindValidator = v.union(
+  v.literal("photo"),
+  v.literal("video"),
+  v.literal("audio"),
+  v.literal("voice"),
+  v.literal("document"),
+);
+
+const telegramAttachmentValidator = v.object({
+  kind: telegramAttachmentKindValidator,
+  status: v.union(v.literal("ready"), v.literal("expired")),
+  storageId: v.string(),
+  telegramFileId: v.string(),
+  fileName: v.optional(v.string()),
+  mimeType: v.optional(v.string()),
+  sizeBytes: v.optional(v.number()),
+  expiresAt: v.number(),
+});
 
 const pushPeriodicityValidator = v.union(
   v.literal("manual"),
@@ -59,6 +78,7 @@ const pushScheduleValidator = v.union(
 
 const messageRuntimeConfigValidator = v.object({
   systemPrompt: v.optional(v.string()),
+  telegramAttachmentRetentionMs: v.optional(v.number()),
 });
 export {
   bridgeFunctionKeyFromToolName,
@@ -139,6 +159,7 @@ export function exposeApi(
         externalMessageId: v.optional(v.string()),
         rawUpdateJson: v.optional(v.string()),
         metadata: v.optional(v.record(v.string(), v.string())),
+        attachments: v.optional(v.array(telegramAttachmentValidator)),
         priority: v.optional(v.number()),
         providerConfig: v.optional(providerConfigValidator),
       },
@@ -158,6 +179,7 @@ export function exposeApi(
             externalMessageId: args.externalMessageId,
             rawUpdateJson: args.rawUpdateJson,
             metadata: args.metadata,
+            attachments: args.attachments,
           },
           priority: args.priority,
           providerConfig: args.providerConfig ?? options.providerConfig,
@@ -1139,10 +1161,28 @@ export function registerRoutes(
           text?: string;
           caption?: string;
           message_id?: number;
-          photo?: Array<{ file_id?: string }>;
-          video?: { file_id?: string; duration?: number };
-          audio?: { file_id?: string; duration?: number };
-          voice?: { file_id?: string; duration?: number };
+          photo?: Array<{ file_id?: string; file_size?: number }>;
+          video?: {
+            file_id?: string;
+            duration?: number;
+            file_name?: string;
+            mime_type?: string;
+            file_size?: number;
+          };
+          audio?: {
+            file_id?: string;
+            duration?: number;
+            file_name?: string;
+            mime_type?: string;
+            file_size?: number;
+          };
+          voice?: { file_id?: string; duration?: number; mime_type?: string; file_size?: number };
+          document?: {
+            file_id?: string;
+            file_name?: string;
+            mime_type?: string;
+            file_size?: number;
+          };
           chat?: { id?: number | string };
           from?: { id?: number | string };
         };
@@ -1160,9 +1200,7 @@ export function registerRoutes(
       const telegramChatId = String(message.chat.id);
       const text = typeof message.text === "string" ? message.text.trim() : "";
       const caption = typeof message.caption === "string" ? message.caption.trim() : "";
-      const hasPhoto = Array.isArray(message.photo) && message.photo.length > 0;
-      const hasVideo = !!message.video;
-      const hasAudio = !!message.audio || !!message.voice;
+      const attachmentCandidates = collectTelegramAttachmentCandidates(message);
 
       const startCommandCode = text ? parseStartCommandCode(text) : null;
       const isStartCommand = text.trimStart().startsWith("/start");
@@ -1241,24 +1279,8 @@ export function registerRoutes(
           },
         );
       }
-      const messageText =
-        text ||
-        caption ||
-        (hasPhoto && hasVideo && hasAudio
-          ? "[telegram media] photo + video + audio message"
-          : hasPhoto && hasVideo
-            ? "[telegram media] photo + video message"
-            : hasPhoto && hasAudio
-              ? "[telegram media] photo + audio message"
-              : hasVideo && hasAudio
-                ? "[telegram media] video + audio message"
-                : hasPhoto
-            ? "[telegram media] photo message"
-            : hasVideo
-              ? "[telegram media] video message"
-            : hasAudio
-              ? "[telegram media] audio message"
-              : "");
+
+      const messageText = buildTelegramMessageText(text, caption, attachmentCandidates);
       if (!messageText) {
         return new Response(JSON.stringify({ ok: true, ignored: true }), {
           status: 200,
@@ -1269,25 +1291,46 @@ export function registerRoutes(
         telegramChatId,
         telegramUserId,
       };
-      if (hasPhoto) {
-        metadata.telegramMediaType = "photo";
-        const largestPhoto = message.photo?.[message.photo.length - 1];
-        if (largestPhoto?.file_id) {
-          metadata.telegramPhotoFileId = largestPhoto.file_id;
+      if (attachmentCandidates.length > 0) {
+        metadata.telegramMediaType = Array.from(
+          new Set(attachmentCandidates.map((attachment) => attachment.kind)),
+        ).join("+");
+        for (const attachment of attachmentCandidates) {
+          const metadataKey = `telegram${attachment.kind[0].toUpperCase()}${attachment.kind.slice(1)}FileId`;
+          metadata[metadataKey] = attachment.telegramFileId;
         }
       }
-      if (message.audio?.file_id) {
-        metadata.telegramMediaType = hasPhoto ? "photo+audio" : hasVideo ? "video+audio" : "audio";
-        metadata.telegramAudioFileId = message.audio.file_id;
+      const ingressConfig = await ctx.runQuery(
+        (component.queue as any).getTelegramIngressRuntimeConfig,
+        { agentKey },
+      );
+      if (attachmentCandidates.length > 0 && !ingressConfig.botToken) {
+        return new Response(
+          JSON.stringify({
+            ok: false,
+            error: `missing active telegram bot token for agent '${agentKey}'`,
+          }),
+          {
+            status: 503,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
       }
-      if (message.voice?.file_id) {
-        metadata.telegramMediaType = hasPhoto ? "photo+voice" : hasVideo ? "video+voice" : "voice";
-        metadata.telegramVoiceFileId = message.voice.file_id;
-      }
-      if (message.video?.file_id) {
-        metadata.telegramMediaType = hasPhoto ? "photo+video" : "video";
-        metadata.telegramVideoFileId = message.video.file_id;
-      }
+      const expiresAt = Date.now() + ingressConfig.attachmentRetentionMs;
+      const attachments =
+        attachmentCandidates.length > 0 && ingressConfig.botToken
+          ? await Promise.all(
+              attachmentCandidates.map((attachment) =>
+                uploadTelegramAttachmentToConvex(
+                  ctx,
+                  component,
+                  ingressConfig.botToken as string,
+                  attachment,
+                  expiresAt,
+                ),
+              ),
+            )
+          : undefined;
       await ctx.runMutation(component.lib.enqueue, {
         conversationId: mapped.conversationId ?? `telegram:${telegramChatId}`,
         agentKey,
@@ -1298,6 +1341,7 @@ export function registerRoutes(
           externalMessageId: String(message.message_id ?? update.update_id ?? ""),
           rawUpdateJson: JSON.stringify(update),
           metadata,
+          attachments,
         },
         providerConfig,
       });
@@ -1312,4 +1356,220 @@ export function registerRoutes(
 function parseStartCommandCode(messageText: string): string | null {
   const match = messageText.match(/^\/start(?:@\w+)?\s+([A-Za-z0-9_-]{4,128})\s*$/);
   return match ? match[1] : null;
+}
+
+type TelegramWebhookMessage = {
+  text?: string;
+  caption?: string;
+  message_id?: number;
+  photo?: Array<{ file_id?: string; file_size?: number }>;
+  video?: {
+    file_id?: string;
+    file_name?: string;
+    mime_type?: string;
+    file_size?: number;
+  };
+  audio?: {
+    file_id?: string;
+    file_name?: string;
+    mime_type?: string;
+    file_size?: number;
+  };
+  voice?: {
+    file_id?: string;
+    mime_type?: string;
+    file_size?: number;
+  };
+  document?: {
+    file_id?: string;
+    file_name?: string;
+    mime_type?: string;
+    file_size?: number;
+  };
+};
+
+type TelegramAttachmentCandidate = {
+  kind: "photo" | "video" | "audio" | "voice" | "document";
+  telegramFileId: string;
+  fileName?: string;
+  mimeType?: string;
+  sizeBytes?: number;
+};
+
+function collectTelegramAttachmentCandidates(
+  message: TelegramWebhookMessage,
+): Array<TelegramAttachmentCandidate> {
+  const attachments: Array<TelegramAttachmentCandidate> = [];
+  const largestPhoto = Array.isArray(message.photo) ? message.photo[message.photo.length - 1] : null;
+  if (largestPhoto?.file_id) {
+    attachments.push({
+      kind: "photo",
+      telegramFileId: largestPhoto.file_id,
+      sizeBytes: largestPhoto.file_size,
+      mimeType: "image/jpeg",
+    });
+  }
+  if (message.video?.file_id) {
+    attachments.push({
+      kind: "video",
+      telegramFileId: message.video.file_id,
+      fileName: message.video.file_name,
+      mimeType: message.video.mime_type,
+      sizeBytes: message.video.file_size,
+    });
+  }
+  if (message.audio?.file_id) {
+    attachments.push({
+      kind: "audio",
+      telegramFileId: message.audio.file_id,
+      fileName: message.audio.file_name,
+      mimeType: message.audio.mime_type,
+      sizeBytes: message.audio.file_size,
+    });
+  }
+  if (message.voice?.file_id) {
+    attachments.push({
+      kind: "voice",
+      telegramFileId: message.voice.file_id,
+      mimeType: message.voice.mime_type,
+      sizeBytes: message.voice.file_size,
+    });
+  }
+  if (message.document?.file_id) {
+    attachments.push({
+      kind: "document",
+      telegramFileId: message.document.file_id,
+      fileName: message.document.file_name,
+      mimeType: message.document.mime_type,
+      sizeBytes: message.document.file_size,
+    });
+  }
+  return attachments;
+}
+
+function buildTelegramMessageText(
+  text: string,
+  caption: string,
+  attachments: Array<TelegramAttachmentCandidate>,
+): string {
+  if (text) {
+    return text;
+  }
+  if (caption) {
+    return caption;
+  }
+  if (attachments.length === 0) {
+    return "";
+  }
+  const kinds = Array.from(new Set(attachments.map((attachment) => attachment.kind)));
+  const label = kinds.join(" + ");
+  return `[telegram media] ${label} message`;
+}
+
+async function uploadTelegramAttachmentToConvex(
+  ctx: Pick<GenericActionCtx<GenericDataModel>, "runMutation">,
+  component: ComponentApi,
+  telegramBotToken: string,
+  attachment: TelegramAttachmentCandidate,
+  expiresAt: number,
+) {
+  const filePath = await fetchTelegramFilePath(telegramBotToken, attachment.telegramFileId);
+  const downloaded = await downloadTelegramFile(telegramBotToken, filePath);
+  const uploadTarget = (await ctx.runMutation((component.queue as any).generateMediaUploadUrl, {})) as {
+    uploadUrl: string;
+  };
+  const uploadResponse = await fetch(uploadTarget.uploadUrl, {
+    method: "POST",
+    headers:
+      downloaded.mimeType.length > 0
+        ? {
+            "Content-Type": downloaded.mimeType,
+          }
+        : undefined,
+    body: downloaded.blob,
+  });
+  const uploadPayload = (await uploadResponse.json().catch(() => ({}))) as {
+    storageId?: string;
+  };
+  if (!uploadResponse.ok || typeof uploadPayload.storageId !== "string") {
+    throw new Error(`Convex storage upload failed for Telegram ${attachment.kind} attachment`);
+  }
+  return {
+    kind: attachment.kind,
+    status: "ready" as const,
+    storageId: uploadPayload.storageId,
+    telegramFileId: attachment.telegramFileId,
+    fileName: attachment.fileName,
+    mimeType: downloaded.mimeType || attachment.mimeType,
+    sizeBytes: attachment.sizeBytes ?? downloaded.blob.size,
+    expiresAt,
+  };
+}
+
+async function fetchTelegramFilePath(
+  telegramBotToken: string,
+  telegramFileId: string,
+): Promise<string> {
+  const telegramApiBaseUrl = `https://api.telegram.org/bot${encodeURIComponent(telegramBotToken)}`;
+  const response = await fetch(
+    `${telegramApiBaseUrl}/getFile?file_id=${encodeURIComponent(telegramFileId)}`,
+  );
+  const payload = (await response.json().catch(() => ({}))) as {
+    ok?: boolean;
+    description?: string;
+    result?: {
+      file_path?: string;
+    };
+  };
+  if (!response.ok || payload.ok !== true || typeof payload.result?.file_path !== "string") {
+    throw new Error(
+      `Telegram getFile failed: ${typeof payload.description === "string" ? payload.description : "missing file_path"}`,
+    );
+  }
+  return payload.result.file_path;
+}
+
+async function downloadTelegramFile(telegramBotToken: string, filePath: string) {
+  const response = await fetch(
+    `https://api.telegram.org/file/bot${encodeURIComponent(telegramBotToken)}/${filePath}`,
+  );
+  if (!response.ok) {
+    throw new Error(`Telegram file download failed with status ${response.status}`);
+  }
+  const blob = await response.blob();
+  const mimeType =
+    response.headers.get("Content-Type") ??
+    blob.type ??
+    inferMimeTypeFromFilePath(filePath) ??
+    "application/octet-stream";
+  return {
+    blob: mimeType === blob.type ? blob : new Blob([await blob.arrayBuffer()], { type: mimeType }),
+    mimeType,
+  };
+}
+
+function inferMimeTypeFromFilePath(filePath: string): string | null {
+  const normalizedPath = filePath.toLowerCase();
+  if (normalizedPath.endsWith(".jpg") || normalizedPath.endsWith(".jpeg")) {
+    return "image/jpeg";
+  }
+  if (normalizedPath.endsWith(".png")) {
+    return "image/png";
+  }
+  if (normalizedPath.endsWith(".webp")) {
+    return "image/webp";
+  }
+  if (normalizedPath.endsWith(".mp4")) {
+    return "video/mp4";
+  }
+  if (normalizedPath.endsWith(".mp3")) {
+    return "audio/mpeg";
+  }
+  if (normalizedPath.endsWith(".ogg")) {
+    return "audio/ogg";
+  }
+  if (normalizedPath.endsWith(".pdf")) {
+    return "application/pdf";
+  }
+  return null;
 }

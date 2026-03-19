@@ -72,6 +72,26 @@ export default defineSchema({
       externalMessageId: v.optional(v.string()),
       rawUpdateJson: v.optional(v.string()),
       metadata: v.optional(v.record(v.string(), v.string())),
+      attachments: v.optional(
+        v.array(
+          v.object({
+            kind: v.union(
+              v.literal("photo"),
+              v.literal("video"),
+              v.literal("audio"),
+              v.literal("voice"),
+              v.literal("document"),
+            ),
+            status: v.union(v.literal("ready"), v.literal("expired")),
+            storageId: v.id("_storage"),
+            telegramFileId: v.string(),
+            fileName: v.optional(v.string()),
+            mimeType: v.optional(v.string()),
+            sizeBytes: v.optional(v.number()),
+            expiresAt: v.number(),
+          }),
+        ),
+      ),
     }),
     status: v.union(
       v.literal("queued"),
@@ -152,10 +172,36 @@ export default defineSchema({
     messageConfig: v.optional(
       v.object({
         systemPrompt: v.optional(v.string()),
+        telegramAttachmentRetentionMs: v.optional(v.number()),
       }),
     ),
     updatedAt: v.number(),
   }).index("by_key", ["key"]),
+
+  messageAttachments: defineTable({
+    messageId: v.id("messageQueue"),
+    conversationId: v.string(),
+    agentKey: v.string(),
+    provider: v.string(),
+    kind: v.union(
+      v.literal("photo"),
+      v.literal("video"),
+      v.literal("audio"),
+      v.literal("voice"),
+      v.literal("document"),
+    ),
+    status: v.union(v.literal("ready"), v.literal("expired")),
+    storageId: v.id("_storage"),
+    telegramFileId: v.string(),
+    fileName: v.optional(v.string()),
+    mimeType: v.optional(v.string()),
+    sizeBytes: v.optional(v.number()),
+    createdAt: v.number(),
+    expiresAt: v.number(),
+  })
+    .index("by_messageId", ["messageId"])
+    .index("by_status_and_expiresAt", ["status", "expiresAt"])
+    .index("by_conversationId_and_createdAt", ["conversationId", "createdAt"]),
 
   dataSnapshots: defineTable({
     workspaceId: v.string(),

@@ -25,6 +25,30 @@ const queueStatusValidator = v.union(
   v.literal("dead_letter"),
 );
 
+const telegramAttachmentKindValidator = v.union(
+  v.literal("photo"),
+  v.literal("video"),
+  v.literal("audio"),
+  v.literal("voice"),
+  v.literal("document"),
+);
+
+const telegramAttachmentStatusValidator = v.union(
+  v.literal("ready"),
+  v.literal("expired"),
+);
+
+const telegramAttachmentValidator = v.object({
+  kind: telegramAttachmentKindValidator,
+  status: telegramAttachmentStatusValidator,
+  storageId: v.id("_storage"),
+  telegramFileId: v.string(),
+  fileName: v.optional(v.string()),
+  mimeType: v.optional(v.string()),
+  sizeBytes: v.optional(v.number()),
+  expiresAt: v.number(),
+});
+
 const queuePayloadValidator = v.object({
   provider: v.string(),
   providerUserId: v.string(),
@@ -32,6 +56,7 @@ const queuePayloadValidator = v.object({
   externalMessageId: v.optional(v.string()),
   rawUpdateJson: v.optional(v.string()),
   metadata: v.optional(v.record(v.string(), v.string())),
+  attachments: v.optional(v.array(telegramAttachmentValidator)),
 });
 
 const snapshotReasonValidator = v.union(
@@ -155,6 +180,7 @@ const workerSpawnOpenClawEnvValidator = v.object({
 
 const messageRuntimeConfigValidator = v.object({
   systemPrompt: v.optional(v.string()),
+  telegramAttachmentRetentionMs: v.optional(v.number()),
 });
 
 const globalSkillStatusValidator = v.union(v.literal("active"), v.literal("disabled"));
@@ -191,6 +217,8 @@ const RUNTIME_CONFIG_KEYS = {
   provider: "provider",
   message: "message",
 } as const;
+
+const DEFAULT_TELEGRAM_ATTACHMENT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 export const enqueueMessage = mutation({
   args: {
@@ -530,6 +558,33 @@ export const getMessageRuntimeConfig = internalQuery({
       return null;
     }
     return row.messageConfig;
+  },
+});
+
+export const getTelegramIngressRuntimeConfig = internalQuery({
+  args: {
+    agentKey: v.string(),
+  },
+  returns: v.object({
+    botToken: v.union(v.null(), v.string()),
+    attachmentRetentionMs: v.number(),
+  }),
+  handler: async (ctx, args) => {
+    const profile = await ctx.db
+      .query("agentProfiles")
+      .withIndex("by_agentKey", (q) => q.eq("agentKey", args.agentKey))
+      .unique();
+    const botToken = profile ? await resolveActiveTelegramBotToken(ctx, profile.secretsRef) : null;
+    const row = await ctx.db
+      .query("runtimeConfig")
+      .withIndex("by_key", (q) => q.eq("key", RUNTIME_CONFIG_KEYS.message))
+      .unique();
+    return {
+      botToken,
+      attachmentRetentionMs: resolveTelegramAttachmentRetentionMs(
+        row?.messageConfig?.telegramAttachmentRetentionMs,
+      ),
+    };
   },
 });
 
@@ -1694,22 +1749,7 @@ export const getHydrationBundleForClaimedJob = query({
       .withIndex("by_conversationId", (q) => q.eq("conversationId", message.conversationId))
       .first();
 
-    let telegramBotToken: string | null = null;
-    const telegramSecretRefs = profile.secretsRef.filter(
-      (ref) => ref === "telegram.botToken" || ref.startsWith("telegram.botToken."),
-    );
-    for (const telegramSecretRef of telegramSecretRefs) {
-      const activeSecret = await ctx.db
-        .query("secrets")
-        .withIndex("by_secretRef_and_active", (q) =>
-          q.eq("secretRef", telegramSecretRef).eq("active", true),
-        )
-        .unique();
-      if (activeSecret) {
-        telegramBotToken = decryptSecretValue(activeSecret.encryptedValue, activeSecret.algorithm);
-        break;
-      }
-    }
+    const telegramBotToken = await resolveActiveTelegramBotToken(ctx, profile.secretsRef);
 
     const contextHistory =
       conversationCache && conversationCache.snapshotKey === snapshotKey
@@ -2424,6 +2464,49 @@ export const expireOldDataSnapshots = internalMutation({
   },
 });
 
+export const expireOldTelegramAttachments = internalMutation({
+  args: {
+    nowMs: v.optional(v.number()),
+    limit: v.optional(v.number()),
+  },
+  returns: v.number(),
+  handler: async (ctx, args) => {
+    const nowMs = args.nowMs ?? Date.now();
+    const limit = args.limit ?? 100;
+    const rows = await ctx.db
+      .query("messageAttachments")
+      .withIndex("by_status_and_expiresAt", (q) =>
+        q.eq("status", "ready").lte("expiresAt", nowMs),
+      )
+      .take(limit);
+    for (const row of rows) {
+      await ctx.db.patch(row._id, {
+        status: "expired",
+      });
+      const message = await ctx.db.get(row.messageId);
+      if (message?.payload.attachments?.length) {
+        await ctx.db.patch(message._id, {
+          payload: {
+            ...message.payload,
+            attachments: message.payload.attachments.map((attachment) =>
+              attachment.storageId === row.storageId
+                ? {
+                    ...attachment,
+                    status: "expired" as const,
+                  }
+                : attachment,
+            ),
+          },
+        });
+      }
+      await (ctx.storage as { delete?: (storageId: Id<"_storage">) => Promise<void> }).delete?.(
+        row.storageId,
+      );
+    }
+    return rows.length;
+  },
+});
+
 export const getWorkerStats = query({
   args: {},
   returns: v.object({
@@ -2638,6 +2721,16 @@ async function enqueueMessageRecord(
       externalMessageId?: string;
       rawUpdateJson?: string;
       metadata?: Record<string, string>;
+      attachments?: Array<{
+        kind: "photo" | "video" | "audio" | "voice" | "document";
+        status: "ready" | "expired";
+        storageId: Id<"_storage">;
+        telegramFileId: string;
+        fileName?: string;
+        mimeType?: string;
+        sizeBytes?: number;
+        expiresAt: number;
+      }>;
     };
     priority?: number;
     scheduledFor?: number;
@@ -2709,6 +2802,23 @@ async function enqueueMessageRecord(
     attempts: 0,
     maxAttempts: args.maxAttempts ?? DEFAULT_CONFIG.retry.maxAttempts,
   });
+  for (const attachment of payload.attachments ?? []) {
+    await ctx.db.insert("messageAttachments", {
+      messageId,
+      conversationId: args.conversationId,
+      agentKey: args.agentKey,
+      provider: payload.provider,
+      kind: attachment.kind,
+      status: attachment.status,
+      storageId: attachment.storageId,
+      telegramFileId: attachment.telegramFileId,
+      fileName: attachment.fileName,
+      mimeType: attachment.mimeType,
+      sizeBytes: attachment.sizeBytes,
+      createdAt: nowMs,
+      expiresAt: attachment.expiresAt,
+    });
+  }
   try {
     await ctx.scheduler.runAfter(0, (internal.scheduler as any).reconcileWorkerPoolFromEnqueue, {
       workspaceId: "default",
@@ -2970,13 +3080,27 @@ function dedupeMessagesById<T extends { _id: string }>(messages: Array<T>): Arra
 }
 
 function normalizeMessageRuntimeConfig(
-  messageConfig: { systemPrompt?: string } | null | undefined,
-): { systemPrompt?: string } | null {
+  messageConfig:
+    | {
+        systemPrompt?: string;
+        telegramAttachmentRetentionMs?: number;
+      }
+    | null
+    | undefined,
+): { systemPrompt?: string; telegramAttachmentRetentionMs?: number } | null {
   const systemPrompt = normalizeSystemPrompt(messageConfig?.systemPrompt);
-  if (systemPrompt === null) {
+  const telegramAttachmentRetentionMs = normalizeTelegramAttachmentRetentionMs(
+    messageConfig?.telegramAttachmentRetentionMs,
+  );
+  if (systemPrompt === null && telegramAttachmentRetentionMs === undefined) {
     return null;
   }
-  return { systemPrompt };
+  return {
+    ...(systemPrompt === null ? {} : { systemPrompt }),
+    ...(telegramAttachmentRetentionMs === undefined
+      ? {}
+      : { telegramAttachmentRetentionMs }),
+  };
 }
 
 function normalizeSystemPrompt(systemPrompt?: string | null): string | null {
@@ -2985,6 +3109,47 @@ function normalizeSystemPrompt(systemPrompt?: string | null): string | null {
   }
   const normalizedSystemPrompt = systemPrompt.trim();
   return normalizedSystemPrompt.length > 0 ? normalizedSystemPrompt : null;
+}
+
+function normalizeTelegramAttachmentRetentionMs(
+  retentionMs?: number | null,
+): number | undefined {
+  if (typeof retentionMs !== "number" || !Number.isFinite(retentionMs)) {
+    return undefined;
+  }
+  const normalizedRetentionMs = Math.floor(retentionMs);
+  if (normalizedRetentionMs <= 0) {
+    return undefined;
+  }
+  return normalizedRetentionMs;
+}
+
+function resolveTelegramAttachmentRetentionMs(retentionMs?: number | null): number {
+  return (
+    normalizeTelegramAttachmentRetentionMs(retentionMs) ??
+    DEFAULT_TELEGRAM_ATTACHMENT_RETENTION_MS
+  );
+}
+
+async function resolveActiveTelegramBotToken(
+  ctx: QueryCtx,
+  secretRefs: Array<string>,
+): Promise<string | null> {
+  const telegramSecretRefs = secretRefs.filter(
+    (ref) => ref === "telegram.botToken" || ref.startsWith("telegram.botToken."),
+  );
+  for (const telegramSecretRef of telegramSecretRefs) {
+    const activeSecret = await ctx.db
+      .query("secrets")
+      .withIndex("by_secretRef_and_active", (q) =>
+        q.eq("secretRef", telegramSecretRef).eq("active", true),
+      )
+      .unique();
+    if (activeSecret) {
+      return decryptSecretValue(activeSecret.encryptedValue, activeSecret.algorithm);
+    }
+  }
+  return null;
 }
 
 async function buildGlobalSkillMaterialization(skill: {

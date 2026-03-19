@@ -206,6 +206,10 @@ async function runReconcileWorkerPool(
     nowMs,
     limit: 100,
   });
+  await ctx.runMutation((internal.queue as any).expireOldTelegramAttachments, {
+    nowMs,
+    limit: 100,
+  });
 
   return {
     activeWorkers: cycle.activeWorkers,
