@@ -265,6 +265,7 @@ describe("component lib", () => {
     });
     expect(bundle?.payload.attachments).toHaveLength(1);
     expect(bundle?.payload.attachments?.[0]?.storageId).toBe(storageId);
+    expect(bundle?.payload.attachments?.[0]?.downloadUrl).toEqual(expect.any(String));
 
     const attachmentRows = await t.run(async (ctx) => {
       return await ctx.db

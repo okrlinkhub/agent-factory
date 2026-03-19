@@ -4,7 +4,7 @@ import {
   mutationGeneric,
   queryGeneric,
 } from "convex/server";
-import type { Auth, GenericActionCtx, GenericDataModel, HttpRouter } from "convex/server";
+import type { Auth, HttpRouter } from "convex/server";
 import { v } from "convex/values";
 import type { ComponentApi } from "../component/_generated/component.js";
 import {
@@ -1300,36 +1300,12 @@ export function registerRoutes(
           metadata[metadataKey] = attachment.telegramFileId;
         }
       }
-      const ingressConfig = await ctx.runQuery(
-        (component.queue as any).getTelegramIngressRuntimeConfig,
-        { agentKey },
-      );
-      if (attachmentCandidates.length > 0 && !ingressConfig.botToken) {
-        return new Response(
-          JSON.stringify({
-            ok: false,
-            error: `missing active telegram bot token for agent '${agentKey}'`,
-          }),
-          {
-            status: 503,
-            headers: { "Content-Type": "application/json" },
-          },
-        );
-      }
-      const expiresAt = Date.now() + ingressConfig.attachmentRetentionMs;
       const attachments =
-        attachmentCandidates.length > 0 && ingressConfig.botToken
-          ? await Promise.all(
-              attachmentCandidates.map((attachment) =>
-                uploadTelegramAttachmentToConvex(
-                  ctx,
-                  component,
-                  ingressConfig.botToken as string,
-                  attachment,
-                  expiresAt,
-                ),
-              ),
-            )
+        attachmentCandidates.length > 0
+          ? await ctx.runAction((component.queue as any).prepareTelegramAttachmentsForEnqueue, {
+              agentKey,
+              attachments: attachmentCandidates,
+            })
           : undefined;
       await ctx.runMutation(component.lib.enqueue, {
         conversationId: mapped.conversationId ?? `telegram:${telegramChatId}`,
@@ -1466,110 +1442,3 @@ function buildTelegramMessageText(
   return `[telegram media] ${label} message`;
 }
 
-async function uploadTelegramAttachmentToConvex(
-  ctx: Pick<GenericActionCtx<GenericDataModel>, "runMutation">,
-  component: ComponentApi,
-  telegramBotToken: string,
-  attachment: TelegramAttachmentCandidate,
-  expiresAt: number,
-) {
-  const filePath = await fetchTelegramFilePath(telegramBotToken, attachment.telegramFileId);
-  const downloaded = await downloadTelegramFile(telegramBotToken, filePath);
-  const uploadTarget = (await ctx.runMutation((component.queue as any).generateMediaUploadUrl, {})) as {
-    uploadUrl: string;
-  };
-  const uploadResponse = await fetch(uploadTarget.uploadUrl, {
-    method: "POST",
-    headers:
-      downloaded.mimeType.length > 0
-        ? {
-            "Content-Type": downloaded.mimeType,
-          }
-        : undefined,
-    body: downloaded.blob,
-  });
-  const uploadPayload = (await uploadResponse.json().catch(() => ({}))) as {
-    storageId?: string;
-  };
-  if (!uploadResponse.ok || typeof uploadPayload.storageId !== "string") {
-    throw new Error(`Convex storage upload failed for Telegram ${attachment.kind} attachment`);
-  }
-  return {
-    kind: attachment.kind,
-    status: "ready" as const,
-    storageId: uploadPayload.storageId,
-    telegramFileId: attachment.telegramFileId,
-    fileName: attachment.fileName,
-    mimeType: downloaded.mimeType || attachment.mimeType,
-    sizeBytes: attachment.sizeBytes ?? downloaded.blob.size,
-    expiresAt,
-  };
-}
-
-async function fetchTelegramFilePath(
-  telegramBotToken: string,
-  telegramFileId: string,
-): Promise<string> {
-  const telegramApiBaseUrl = `https://api.telegram.org/bot${encodeURIComponent(telegramBotToken)}`;
-  const response = await fetch(
-    `${telegramApiBaseUrl}/getFile?file_id=${encodeURIComponent(telegramFileId)}`,
-  );
-  const payload = (await response.json().catch(() => ({}))) as {
-    ok?: boolean;
-    description?: string;
-    result?: {
-      file_path?: string;
-    };
-  };
-  if (!response.ok || payload.ok !== true || typeof payload.result?.file_path !== "string") {
-    throw new Error(
-      `Telegram getFile failed: ${typeof payload.description === "string" ? payload.description : "missing file_path"}`,
-    );
-  }
-  return payload.result.file_path;
-}
-
-async function downloadTelegramFile(telegramBotToken: string, filePath: string) {
-  const response = await fetch(
-    `https://api.telegram.org/file/bot${encodeURIComponent(telegramBotToken)}/${filePath}`,
-  );
-  if (!response.ok) {
-    throw new Error(`Telegram file download failed with status ${response.status}`);
-  }
-  const blob = await response.blob();
-  const mimeType =
-    response.headers.get("Content-Type") ??
-    blob.type ??
-    inferMimeTypeFromFilePath(filePath) ??
-    "application/octet-stream";
-  return {
-    blob: mimeType === blob.type ? blob : new Blob([await blob.arrayBuffer()], { type: mimeType }),
-    mimeType,
-  };
-}
-
-function inferMimeTypeFromFilePath(filePath: string): string | null {
-  const normalizedPath = filePath.toLowerCase();
-  if (normalizedPath.endsWith(".jpg") || normalizedPath.endsWith(".jpeg")) {
-    return "image/jpeg";
-  }
-  if (normalizedPath.endsWith(".png")) {
-    return "image/png";
-  }
-  if (normalizedPath.endsWith(".webp")) {
-    return "image/webp";
-  }
-  if (normalizedPath.endsWith(".mp4")) {
-    return "video/mp4";
-  }
-  if (normalizedPath.endsWith(".mp3")) {
-    return "audio/mpeg";
-  }
-  if (normalizedPath.endsWith(".ogg")) {
-    return "audio/ogg";
-  }
-  if (normalizedPath.endsWith(".pdf")) {
-    return "application/pdf";
-  }
-  return null;
-}

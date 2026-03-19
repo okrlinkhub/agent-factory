@@ -89,6 +89,7 @@ export default defineSchema({
             mimeType: v.optional(v.string()),
             sizeBytes: v.optional(v.number()),
             expiresAt: v.number(),
+            downloadUrl: v.optional(v.string()),
           }),
         ),
       ),

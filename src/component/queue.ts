@@ -1,12 +1,13 @@
 import { v } from "convex/values";
-import { internal } from "./_generated/api.js";
+import { api, internal } from "./_generated/api.js";
 import {
+  action,
   internalMutation,
   internalQuery,
   mutation,
   query,
 } from "./_generated/server.js";
-import type { MutationCtx, QueryCtx } from "./_generated/server.js";
+import type { ActionCtx, MutationCtx, QueryCtx } from "./_generated/server.js";
 import type { Id } from "./_generated/dataModel.js";
 import { computeRetryDelayMs, DEFAULT_CONFIG, providerConfigValidator } from "./config.js";
 import {
@@ -47,6 +48,15 @@ const telegramAttachmentValidator = v.object({
   mimeType: v.optional(v.string()),
   sizeBytes: v.optional(v.number()),
   expiresAt: v.number(),
+  downloadUrl: v.optional(v.string()),
+});
+
+const telegramAttachmentCandidateValidator = v.object({
+  kind: telegramAttachmentKindValidator,
+  telegramFileId: v.string(),
+  fileName: v.optional(v.string()),
+  mimeType: v.optional(v.string()),
+  sizeBytes: v.optional(v.number()),
 });
 
 const queuePayloadValidator = v.object({
@@ -219,6 +229,26 @@ const RUNTIME_CONFIG_KEYS = {
 } as const;
 
 const DEFAULT_TELEGRAM_ATTACHMENT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+
+type TelegramAttachmentCandidate = {
+  kind: "photo" | "video" | "audio" | "voice" | "document";
+  telegramFileId: string;
+  fileName?: string;
+  mimeType?: string;
+  sizeBytes?: number;
+};
+
+type PreparedTelegramAttachment = {
+  kind: "photo" | "video" | "audio" | "voice" | "document";
+  status: "ready";
+  storageId: Id<"_storage">;
+  telegramFileId: string;
+  fileName?: string;
+  mimeType?: string;
+  sizeBytes?: number;
+  expiresAt: number;
+  downloadUrl?: string;
+};
 
 export const enqueueMessage = mutation({
   args: {
@@ -585,6 +615,39 @@ export const getTelegramIngressRuntimeConfig = internalQuery({
         row?.messageConfig?.telegramAttachmentRetentionMs,
       ),
     };
+  },
+});
+
+export const prepareTelegramAttachmentsForEnqueue = action({
+  args: {
+    agentKey: v.string(),
+    attachments: v.array(telegramAttachmentCandidateValidator),
+  },
+  returns: v.array(telegramAttachmentValidator),
+  handler: async (
+    ctx,
+    args,
+  ): Promise<Array<PreparedTelegramAttachment>> => {
+    const ingressConfig: {
+      botToken: string | null;
+      attachmentRetentionMs: number;
+    } = await ctx.runQuery(internal.queue.getTelegramIngressRuntimeConfig, {
+      agentKey: args.agentKey,
+    });
+    if (!ingressConfig.botToken) {
+      throw new Error(`missing active telegram bot token for agent '${args.agentKey}'`);
+    }
+    const expiresAt = Date.now() + ingressConfig.attachmentRetentionMs;
+    return await Promise.all(
+      args.attachments.map((attachment) =>
+        persistTelegramAttachmentFromCandidate(
+          ctx,
+          ingressConfig.botToken as string,
+          attachment,
+          expiresAt,
+        ),
+      ),
+    );
   },
 });
 
@@ -1756,12 +1819,13 @@ export const getHydrationBundleForClaimedJob = query({
         ? conversationCache.deltaContext
         : conversation.contextHistory;
     const bridgeRuntimeConfig = await resolveBridgeRuntimeConfig(ctx, profile);
+    const hydratedPayload = await hydrateQueuePayloadAttachments(ctx, message.payload);
 
     return {
       messageId: message._id,
       conversationId: message.conversationId,
       agentKey: message.agentKey,
-      payload: message.payload,
+      payload: hydratedPayload,
       conversationState: {
         contextHistory,
         pendingToolCalls: conversation.pendingToolCalls,
@@ -2834,6 +2898,46 @@ async function enqueueMessageRecord(
   return messageId;
 }
 
+async function hydrateQueuePayloadAttachments(
+  ctx: QueryCtx,
+  payload: {
+    provider: string;
+    providerUserId: string;
+    messageText: string;
+    externalMessageId?: string;
+    rawUpdateJson?: string;
+    metadata?: Record<string, string>;
+    attachments?: Array<{
+      kind: "photo" | "video" | "audio" | "voice" | "document";
+      status: "ready" | "expired";
+      storageId: Id<"_storage">;
+      telegramFileId: string;
+      fileName?: string;
+      mimeType?: string;
+      sizeBytes?: number;
+      expiresAt: number;
+      downloadUrl?: string;
+    }>;
+  },
+) {
+  if (!payload.attachments?.length) {
+    return payload;
+  }
+  const attachments = await Promise.all(
+    payload.attachments.map(async (attachment) => ({
+      ...attachment,
+      downloadUrl:
+        attachment.status === "ready"
+          ? ((await ctx.storage.getUrl(attachment.storageId)) ?? undefined)
+          : undefined,
+    })),
+  );
+  return {
+    ...payload,
+    attachments,
+  };
+}
+
 async function resolveConversationTargetForUserAgent(
   ctx: QueryCtx | MutationCtx,
   consumerUserId: string,
@@ -3148,6 +3252,159 @@ async function resolveActiveTelegramBotToken(
     if (activeSecret) {
       return decryptSecretValue(activeSecret.encryptedValue, activeSecret.algorithm);
     }
+  }
+  return null;
+}
+
+async function persistTelegramAttachmentFromCandidate(
+  ctx: Pick<ActionCtx, "runMutation">,
+  telegramBotToken: string,
+  attachment: TelegramAttachmentCandidate,
+  expiresAt: number,
+): Promise<PreparedTelegramAttachment> {
+  const filePath = await fetchTelegramFilePath(telegramBotToken, attachment.telegramFileId);
+  const downloaded = await downloadTelegramFile(telegramBotToken, filePath);
+  const resolvedMimeType = resolvePreferredTelegramAttachmentMimeType(
+    attachment.mimeType,
+    attachment.fileName,
+    downloaded.mimeType,
+    filePath,
+  );
+  const uploadTarget: { uploadUrl: string } = await ctx.runMutation(
+    api.queue.generateMediaUploadUrl,
+    {},
+  );
+  const uploadResponse = await fetch(uploadTarget.uploadUrl, {
+    method: "POST",
+    headers:
+      resolvedMimeType.length > 0
+        ? {
+            "Content-Type": resolvedMimeType,
+          }
+        : undefined,
+    body: downloaded.blob,
+  });
+  const uploadPayload = (await uploadResponse.json().catch(() => ({}))) as {
+    storageId?: Id<"_storage">;
+  };
+  if (!uploadResponse.ok || !uploadPayload.storageId) {
+    throw new Error(`Convex storage upload failed for Telegram ${attachment.kind} attachment`);
+  }
+  return {
+    kind: attachment.kind,
+    status: "ready" as const,
+    storageId: uploadPayload.storageId,
+    telegramFileId: attachment.telegramFileId,
+    fileName: attachment.fileName,
+    mimeType: resolvedMimeType,
+    sizeBytes: attachment.sizeBytes ?? downloaded.blob.size,
+    expiresAt,
+  };
+}
+
+async function fetchTelegramFilePath(
+  telegramBotToken: string,
+  telegramFileId: string,
+): Promise<string> {
+  const telegramApiBaseUrl = `https://api.telegram.org/bot${encodeURIComponent(telegramBotToken)}`;
+  const response = await fetch(
+    `${telegramApiBaseUrl}/getFile?file_id=${encodeURIComponent(telegramFileId)}`,
+  );
+  const payload = (await response.json().catch(() => ({}))) as {
+    ok?: boolean;
+    description?: string;
+    result?: {
+      file_path?: string;
+    };
+  };
+  if (!response.ok || payload.ok !== true || typeof payload.result?.file_path !== "string") {
+    throw new Error(
+      `Telegram getFile failed: ${typeof payload.description === "string" ? payload.description : "missing file_path"}`,
+    );
+  }
+  return payload.result.file_path;
+}
+
+async function downloadTelegramFile(telegramBotToken: string, filePath: string) {
+  const response = await fetch(
+    `https://api.telegram.org/file/bot${encodeURIComponent(telegramBotToken)}/${filePath}`,
+  );
+  if (!response.ok) {
+    throw new Error(`Telegram file download failed with status ${response.status}`);
+  }
+  const blob = await response.blob();
+  const mimeType =
+    response.headers.get("Content-Type") ??
+    blob.type ??
+    inferMimeTypeFromFilePath(filePath) ??
+    "application/octet-stream";
+  return {
+    blob: mimeType === blob.type ? blob : new Blob([await blob.arrayBuffer()], { type: mimeType }),
+    mimeType,
+  };
+}
+
+function resolvePreferredTelegramAttachmentMimeType(
+  originalMimeType: string | undefined,
+  fileName: string | undefined,
+  downloadedMimeType: string,
+  filePath: string,
+): string {
+  const normalizedOriginalMimeType = normalizeNonGenericMimeType(originalMimeType);
+  if (normalizedOriginalMimeType) {
+    return normalizedOriginalMimeType;
+  }
+  const inferredFromFileName = inferMimeTypeFromFileName(fileName);
+  if (inferredFromFileName) {
+    return inferredFromFileName;
+  }
+  const normalizedDownloadedMimeType = normalizeNonGenericMimeType(downloadedMimeType);
+  if (normalizedDownloadedMimeType) {
+    return normalizedDownloadedMimeType;
+  }
+  return inferMimeTypeFromFilePath(filePath) ?? "application/octet-stream";
+}
+
+function normalizeNonGenericMimeType(mimeType?: string | null): string | null {
+  if (typeof mimeType !== "string") {
+    return null;
+  }
+  const normalizedMimeType = mimeType.trim().toLowerCase();
+  if (!normalizedMimeType || normalizedMimeType === "application/octet-stream") {
+    return null;
+  }
+  return normalizedMimeType;
+}
+
+function inferMimeTypeFromFileName(fileName?: string | null): string | null {
+  if (typeof fileName !== "string") {
+    return null;
+  }
+  return inferMimeTypeFromFilePath(fileName);
+}
+
+function inferMimeTypeFromFilePath(filePath: string): string | null {
+  const normalizedPath = filePath.toLowerCase();
+  if (normalizedPath.endsWith(".jpg") || normalizedPath.endsWith(".jpeg")) {
+    return "image/jpeg";
+  }
+  if (normalizedPath.endsWith(".png")) {
+    return "image/png";
+  }
+  if (normalizedPath.endsWith(".webp")) {
+    return "image/webp";
+  }
+  if (normalizedPath.endsWith(".mp4")) {
+    return "video/mp4";
+  }
+  if (normalizedPath.endsWith(".mp3")) {
+    return "audio/mpeg";
+  }
+  if (normalizedPath.endsWith(".ogg")) {
+    return "audio/ogg";
+  }
+  if (normalizedPath.endsWith(".pdf")) {
+    return "application/pdf";
   }
   return null;
 }

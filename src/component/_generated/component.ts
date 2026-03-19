@@ -483,6 +483,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           messageId: string;
           payload: {
             attachments?: Array<{
+              downloadUrl?: string;
               expiresAt: number;
               fileName?: string;
               kind: "photo" | "video" | "audio" | "voice" | "document";
@@ -783,6 +784,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           nowMs?: number;
           payload: {
             attachments?: Array<{
+              downloadUrl?: string;
               expiresAt: number;
               fileName?: string;
               kind: "photo" | "video" | "audio" | "voice" | "document";
@@ -914,6 +916,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             maxAttempts: number;
             payload: {
               attachments?: Array<{
+                downloadUrl?: string;
                 expiresAt: number;
                 fileName?: string;
                 kind: "photo" | "video" | "audio" | "voice" | "document";
@@ -967,6 +970,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           messageId: string;
           payload: {
             attachments?: Array<{
+              downloadUrl?: string;
               expiresAt: number;
               fileName?: string;
               kind: "photo" | "video" | "audio" | "voice" | "document";
@@ -1372,6 +1376,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           maxAttempts: number;
           payload: {
             attachments?: Array<{
+              downloadUrl?: string;
               expiresAt: number;
               fileName?: string;
               kind: "photo" | "video" | "audio" | "voice" | "document";
@@ -1415,6 +1420,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           maxAttempts: number;
           payload: {
             attachments?: Array<{
+              downloadUrl?: string;
               expiresAt: number;
               fileName?: string;
               kind: "photo" | "video" | "audio" | "voice" | "document";
@@ -2283,6 +2289,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           messageId: string;
           payload: {
             attachments?: Array<{
+              downloadUrl?: string;
               expiresAt: number;
               fileName?: string;
               kind: "photo" | "video" | "audio" | "voice" | "document";
@@ -2372,6 +2379,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           nowMs?: number;
           payload: {
             attachments?: Array<{
+              downloadUrl?: string;
               expiresAt: number;
               fileName?: string;
               kind: "photo" | "video" | "audio" | "voice" | "document";
@@ -2489,6 +2497,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             maxAttempts: number;
             payload: {
               attachments?: Array<{
+                downloadUrl?: string;
                 expiresAt: number;
                 fileName?: string;
                 kind: "photo" | "video" | "audio" | "voice" | "document";
@@ -2542,6 +2551,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           messageId: string;
           payload: {
             attachments?: Array<{
+              downloadUrl?: string;
               expiresAt: number;
               fileName?: string;
               kind: "photo" | "video" | "audio" | "voice" | "document";
@@ -2765,6 +2775,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           maxAttempts: number;
           payload: {
             attachments?: Array<{
+              downloadUrl?: string;
               expiresAt: number;
               fileName?: string;
               kind: "photo" | "video" | "audio" | "voice" | "document";
@@ -2808,6 +2819,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           maxAttempts: number;
           payload: {
             attachments?: Array<{
+              downloadUrl?: string;
               expiresAt: number;
               fileName?: string;
               kind: "photo" | "video" | "audio" | "voice" | "document";
@@ -2887,6 +2899,32 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           workspaceId: string;
         },
         { expiresAt: number; snapshotId: string; uploadUrl: string },
+        Name
+      >;
+      prepareTelegramAttachmentsForEnqueue: FunctionReference<
+        "action",
+        "internal",
+        {
+          agentKey: string;
+          attachments: Array<{
+            fileName?: string;
+            kind: "photo" | "video" | "audio" | "voice" | "document";
+            mimeType?: string;
+            sizeBytes?: number;
+            telegramFileId: string;
+          }>;
+        },
+        Array<{
+          downloadUrl?: string;
+          expiresAt: number;
+          fileName?: string;
+          kind: "photo" | "video" | "audio" | "voice" | "document";
+          mimeType?: string;
+          sizeBytes?: number;
+          status: "ready" | "expired";
+          storageId: string;
+          telegramFileId: string;
+        }>,
         Name
       >;
       providerRuntimeConfig: FunctionReference<
