@@ -2351,11 +2351,11 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           description?: string;
           displayName?: string;
           entryPoint?: string;
+          files: Array<{ content: string; path: string; sha256: string }>;
           moduleFormat?: "esm" | "cjs";
           nowMs?: number;
           releaseChannel?: "stable" | "canary";
           slug: string;
-          sourceJs: string;
           version: string;
         },
         {
@@ -2657,7 +2657,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             sha256: string;
             skillDirName: string;
             slug: string;
-            sourceJs: string;
             version: string;
           }>;
           workspaceId: string;

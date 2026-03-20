@@ -315,7 +315,13 @@ export default defineSchema({
     version: v.string(),
     moduleFormat: v.union(v.literal("esm"), v.literal("cjs")),
     entryPoint: v.string(),
-    sourceJs: v.string(),
+    files: v.array(
+      v.object({
+        path: v.string(),
+        content: v.string(),
+        sha256: v.string(),
+      }),
+    ),
     sha256: v.string(),
     createdBy: v.string(),
     createdAt: v.number(),

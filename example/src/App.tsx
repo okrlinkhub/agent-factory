@@ -3,6 +3,62 @@ import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../convex/_generated/api";
 import { useEffect, useState } from "react";
 
+type SkillBundleFile = {
+  path: string;
+  content: string;
+};
+
+type DeployGlobalSkillArgs = {
+  slug: string;
+  displayName?: string;
+  description?: string;
+  version: string;
+  files: Array<{
+    path: string;
+    content: string;
+    sha256: string;
+  }>;
+  entryPoint?: string;
+  moduleFormat?: "esm" | "cjs";
+  releaseChannel?: "stable" | "canary";
+  actor?: string;
+};
+
+function buildDefaultSkillFiles(moduleFormat: "esm" | "cjs"): SkillBundleFile[] {
+  const entryPath = `scripts/index.${moduleFormat === "cjs" ? "cjs" : "mjs"}`;
+  return [
+    {
+      path: "SKILL.md",
+      content: `---
+name: demo-skill
+description: Skill di test CRUD dal pannello example.
+---
+
+# Demo Skill
+
+Skill bundle-only di esempio.`,
+    },
+    {
+      path: entryPath,
+      content: `export default {
+  description: 'Demo Skill',
+  invoke: async (ctx, args) => {
+    return { ok: true, args };
+  },
+};
+`,
+    },
+  ];
+}
+
+async function computeSha256Hex(value: string) {
+  const input = new TextEncoder().encode(value);
+  const digest = await crypto.subtle.digest("SHA-256", input);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 function App() {
   const seedDefaultAgent = useMutation(api.example.seedDefaultAgent);
   const seedExampleUsers = useMutation(api.example.seedExampleUsers);
@@ -20,6 +76,14 @@ function App() {
   const globalSkillsDeploy = useMutation(api.example.globalSkillsDeploy);
   const globalSkillsSetStatus = useMutation(api.example.globalSkillsSetStatus);
   const globalSkillsDelete = useMutation(api.example.globalSkillsDelete);
+  const deployGlobalSkillBundle = globalSkillsDeploy as unknown as (
+    args: DeployGlobalSkillArgs,
+  ) => Promise<{
+    slug: string;
+    version: string;
+    releaseChannel: "stable" | "canary";
+    sha256: string;
+  }>;
   const globalSkillsList = useQuery(api.example.globalSkillsList, {
     releaseChannel: "stable",
     limit: 200,
@@ -88,8 +152,8 @@ function App() {
   const [skillDescription, setSkillDescription] = useState("Skill di test CRUD dal pannello example.");
   const [skillEntryPoint, setSkillEntryPoint] = useState("default");
   const [skillModuleFormat, setSkillModuleFormat] = useState<"esm" | "cjs">("esm");
-  const [skillSourceJs, setSkillSourceJs] = useState(
-    "export default async function main(context, input) { return { ok: true, input }; }",
+  const [skillFilesJson, setSkillFilesJson] = useState(
+    JSON.stringify(buildDefaultSkillFiles("esm"), null, 2),
   );
   const [selectedSkillSlug, setSelectedSkillSlug] = useState("");
   const [skillsCrudResult, setSkillsCrudResult] = useState<string | null>(null);
@@ -376,12 +440,20 @@ function App() {
     setBusy("global-skill-create");
     setSkillsCrudResult(null);
     try {
-      const result = await globalSkillsDeploy({
+      const rawFiles = JSON.parse(skillFilesJson) as SkillBundleFile[];
+      const files = await Promise.all(
+        rawFiles.map(async (file) => ({
+          path: file.path,
+          content: file.content,
+          sha256: await computeSha256Hex(file.content),
+        })),
+      );
+      const result = await deployGlobalSkillBundle({
         slug: skillSlug.trim(),
         displayName: skillDisplayName.trim(),
         description: skillDescription.trim(),
         version: skillVersion.trim(),
-        sourceJs: skillSourceJs,
+        files,
         entryPoint: skillEntryPoint.trim() || "default",
         moduleFormat: skillModuleFormat,
         releaseChannel: "stable",
@@ -1122,9 +1194,9 @@ function App() {
           </div>
           <div style={{ marginBottom: "0.75rem" }}>
             <textarea
-              value={skillSourceJs}
-              onChange={(event) => setSkillSourceJs(event.target.value)}
-              rows={4}
+              value={skillFilesJson}
+              onChange={(event) => setSkillFilesJson(event.target.value)}
+              rows={10}
               style={{ width: "95%", fontFamily: "monospace", padding: "0.5rem" }}
             />
           </div>

@@ -614,6 +614,7 @@ Fork this repository to maintain your own image with your custom skills/assets.
 
 For `globalSkills` managed by this component, the recommended runtime pattern is different:
 - store the source of truth in component tables `globalSkills`, `globalSkillVersions`, `globalSkillReleases`
+- treat each skill as a mini filesystem bundle (`files[]`), not as a single `sourceJs` blob
 - expose them through `getWorkerGlobalSkillsManifest`
 - let the worker image materialize them into `OPENCLAW_SKILLS_DIR` during prestart, before the OpenClaw gateway boots
 
@@ -621,6 +622,107 @@ The manifest now carries an explicit on-disk layout contract for OpenClaw worksp
 - `layoutVersion = openclaw-workspace-skill-v1`
 - `skillDirName`
 - `files[]` with `path`, `content`, `sha256`
+
+Breaking change in `3.0.0`:
+- `sourceJs` has been removed from the global skill model
+- existing legacy global skill rows must be deleted before moving to `3.0.0`
+- existing legacy skills must be republished as full bundles
+
+Bundle contract for `3.0.0`:
+- required user files:
+  - `SKILL.md`
+  - `scripts/index.mjs` or `scripts/index.cjs` (must match `moduleFormat`)
+- optional user files:
+  - any extra script or asset needed by the skill, for example `scripts/agent-bridge-cli.mjs`
+- system-generated file:
+  - `.af-global-skill.json` must not be provided by clients; it is injected by `agent-factory` during materialization
+
+Extract a `Bundle files JSON` payload from an existing OpenClaw skill directory:
+
+Use this when you already have a correctly materialized skill inside an OpenClaw workspace and want to republish it as a `3.0.0` global skill bundle.
+
+Important:
+- run the command against the skill directory itself (for example `/path/to/workspace/skills/agent-bridge`)
+- the command automatically excludes `.af-global-skill.json`
+- hidden files other than `.af-global-skill.json` are excluded by default
+- the output is the JSON array to paste into the `Bundle files JSON` field in the admin UI
+
+```sh
+node - <<'EOF' "/absolute/path/to/workspace/skills/agent-bridge"
+const fs = require('fs')
+const path = require('path')
+
+const skillDir = process.argv[2]
+if (!skillDir) {
+  console.error('Usage: node extract-skill-bundle.mjs /absolute/path/to/skill-dir')
+  process.exit(1)
+}
+
+function walk(dir, baseDir) {
+  const entries = fs.readdirSync(dir, { withFileTypes: true })
+  const files = []
+
+  for (const entry of entries) {
+    if (entry.name === '.af-global-skill.json') continue
+    if (entry.name.startsWith('.')) continue
+
+    const absolutePath = path.join(dir, entry.name)
+    if (entry.isDirectory()) {
+      files.push(...walk(absolutePath, baseDir))
+      continue
+    }
+
+    const relativePath = path.relative(baseDir, absolutePath).replaceAll(path.sep, '/')
+    files.push({
+      path: relativePath,
+      content: fs.readFileSync(absolutePath, 'utf8'),
+    })
+  }
+
+  return files
+}
+
+const bundle = walk(skillDir, skillDir).sort((left, right) => left.path.localeCompare(right.path))
+console.log(JSON.stringify(bundle, null, 2))
+EOF
+```
+
+Example:
+
+```sh
+node - <<'EOF' "/Users/me/openclaw/workspace/skills/agent-bridge"
+const fs = require('fs')
+const path = require('path')
+
+const skillDir = process.argv[2]
+
+function walk(dir, baseDir) {
+  const entries = fs.readdirSync(dir, { withFileTypes: true })
+  const files = []
+  for (const entry of entries) {
+    if (entry.name === '.af-global-skill.json') continue
+    if (entry.name.startsWith('.')) continue
+    const absolutePath = path.join(dir, entry.name)
+    if (entry.isDirectory()) {
+      files.push(...walk(absolutePath, baseDir))
+      continue
+    }
+    files.push({
+      path: path.relative(baseDir, absolutePath).replaceAll(path.sep, '/'),
+      content: fs.readFileSync(absolutePath, 'utf8'),
+    })
+  }
+  return files
+}
+
+console.log(JSON.stringify(walk(skillDir, skillDir).sort((a, b) => a.path.localeCompare(b.path)), null, 2))
+EOF
+```
+
+The resulting JSON should contain files like:
+- `SKILL.md`
+- `scripts/index.mjs`
+- any extra files such as `scripts/agent-bridge-cli.mjs`
 
 Recommended worker bootstrap order:
 1. restore snapshot into `/data`

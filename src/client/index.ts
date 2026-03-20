@@ -80,6 +80,12 @@ const messageRuntimeConfigValidator = v.object({
   systemPrompt: v.optional(v.string()),
   telegramAttachmentRetentionMs: v.optional(v.number()),
 });
+
+const globalSkillManifestFileValidator = v.object({
+  path: v.string(),
+  content: v.string(),
+  sha256: v.string(),
+});
 export {
   bridgeFunctionKeyFromToolName,
   executeBridgeFunction,
@@ -384,7 +390,7 @@ export function exposeApi(
         displayName: v.optional(v.string()),
         description: v.optional(v.string()),
         version: v.string(),
-        sourceJs: v.string(),
+        files: v.array(globalSkillManifestFileValidator),
         entryPoint: v.optional(v.string()),
         moduleFormat: v.optional(v.union(v.literal("esm"), v.literal("cjs"))),
         releaseChannel: v.optional(v.union(v.literal("stable"), v.literal("canary"))),

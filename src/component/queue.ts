@@ -208,7 +208,6 @@ const globalSkillManifestItemValidator = v.object({
   version: v.string(),
   moduleFormat: globalSkillModuleFormatValidator,
   entryPoint: v.string(),
-  sourceJs: v.string(),
   sha256: v.string(),
   skillDirName: v.string(),
   files: v.array(globalSkillManifestFileValidator),
@@ -742,7 +741,7 @@ export const deployGlobalSkill = mutation({
     displayName: v.optional(v.string()),
     description: v.optional(v.string()),
     version: v.string(),
-    sourceJs: v.string(),
+    files: v.array(globalSkillManifestFileValidator),
     entryPoint: v.optional(v.string()),
     moduleFormat: v.optional(globalSkillModuleFormatValidator),
     releaseChannel: v.optional(globalSkillReleaseChannelValidator),
@@ -766,7 +765,7 @@ export const deployGlobalSkill = mutation({
     const releaseChannel = args.releaseChannel ?? "stable";
     const moduleFormat = args.moduleFormat ?? "esm";
     const actor = args.actor?.trim() || "system";
-    const sourceJs = args.sourceJs.trim();
+    const files = await normalizeGlobalSkillBundleFiles(args.files, moduleFormat);
 
     if (!/^[a-z0-9][a-z0-9-_]{1,127}$/.test(slug)) {
       throw new Error("Invalid skill slug. Use lowercase letters, numbers, '-' and '_'.");
@@ -774,17 +773,11 @@ export const deployGlobalSkill = mutation({
     if (!/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(version)) {
       throw new Error("Invalid skill version. Use semantic versioning format.");
     }
-    if (sourceJs.length < 16) {
-      throw new Error("Skill source is too short.");
-    }
-    if (sourceJs.length > 200_000) {
-      throw new Error("Skill source too large (max 200KB).");
-    }
     if (!entryPoint) {
       throw new Error("entryPoint is required.");
     }
 
-    const sha256 = await computeSha256Hex(sourceJs);
+    const sha256 = await computeGlobalSkillBundleSha256(files);
 
     const existingSkill = await ctx.db
       .query("globalSkills")
@@ -826,13 +819,17 @@ export const deployGlobalSkill = mutation({
         version,
         moduleFormat,
         entryPoint,
-        sourceJs,
+        files,
         sha256,
         createdBy: actor,
         createdAt: nowMs,
       });
-    } else if (existingVersion.sha256 !== sha256) {
-      throw new Error(`Skill ${slug}@${version} already exists with a different source.`);
+    } else if (
+      existingVersion.sha256 !== sha256 ||
+      existingVersion.moduleFormat !== moduleFormat ||
+      existingVersion.entryPoint !== entryPoint
+    ) {
+      throw new Error(`Skill ${slug}@${version} already exists with a different bundle.`);
     }
 
     const activeReleases = await ctx.db
@@ -993,7 +990,6 @@ export const getWorkerGlobalSkillsManifest = query({
       version: string;
       moduleFormat: "esm" | "cjs";
       entryPoint: string;
-      sourceJs: string;
       sha256: string;
       skillDirName: string;
       files: Array<{
@@ -1019,7 +1015,7 @@ export const getWorkerGlobalSkillsManifest = query({
         version: version.version,
         moduleFormat: version.moduleFormat,
         entryPoint: version.entryPoint,
-        sourceJs: version.sourceJs,
+        files: version.files,
         sha256: version.sha256,
       });
       manifestSkills.push({
@@ -1027,7 +1023,6 @@ export const getWorkerGlobalSkillsManifest = query({
         version: version.version,
         moduleFormat: version.moduleFormat,
         entryPoint: version.entryPoint,
-        sourceJs: version.sourceJs,
         sha256: version.sha256,
         skillDirName: materializedSkill.skillDirName,
         files: materializedSkill.files,
@@ -1040,7 +1035,14 @@ export const getWorkerGlobalSkillsManifest = query({
     });
 
     const fingerprintSeed = manifestSkills
-      .map((row) => `${row.slug}@${row.version}:${row.sha256}`)
+      .map(
+        (row) =>
+          `${row.slug}@${row.version}:${row.sha256}:${row.files
+            .filter((file) => file.path !== ".af-global-skill.json")
+            .map((file) => `${file.path}:${file.sha256}`)
+            .sort()
+            .join(",")}`,
+      )
       .join("|");
     const manifestVersion = await computeSha256Hex(fingerprintSeed || "empty");
 
@@ -3414,7 +3416,11 @@ async function buildGlobalSkillMaterialization(skill: {
   version: string;
   moduleFormat: "esm" | "cjs";
   entryPoint: string;
-  sourceJs: string;
+  files: Array<{
+    path: string;
+    content: string;
+    sha256: string;
+  }>;
   sha256: string;
 }): Promise<{
   skillDirName: string;
@@ -3425,26 +3431,11 @@ async function buildGlobalSkillMaterialization(skill: {
   }>;
 }> {
   const skillDirName = normalizeGlobalSkillDirName(skill.slug);
-  const scriptExt = skill.moduleFormat === "cjs" ? "cjs" : "mjs";
-  const scriptRelativePath = `scripts/index.${scriptExt}`;
-  const skillMd = [
-    "---",
-    `name: ${skill.slug}`,
-    `description: Global skill ${skill.slug}@${skill.version} provisioned by agent-factory.`,
-    "---",
-    "",
-    "# Global Skill",
-    "",
-    "This skill is generated automatically from agent-factory globalSkills.",
-    "",
-    `- slug: ${skill.slug}`,
-    `- version: ${skill.version}`,
-    `- entryPoint: ${skill.entryPoint}`,
-    `- moduleFormat: ${skill.moduleFormat}`,
-    "",
-    "Do not edit manually.",
-    "",
-  ].join("\n");
+  const bundleFiles = await normalizeGlobalSkillBundleFiles(skill.files, skill.moduleFormat);
+  const bundleSha256 = await computeGlobalSkillBundleSha256(bundleFiles);
+  if (bundleSha256 !== skill.sha256) {
+    throw new Error(`Global skill bundle checksum mismatch for ${skill.slug}@${skill.version}.`);
+  }
   const markerJson = `${JSON.stringify(
     {
       slug: skill.slug,
@@ -3453,22 +3444,12 @@ async function buildGlobalSkillMaterialization(skill: {
       managedBy: "agent-factory",
       entryPoint: skill.entryPoint,
       moduleFormat: skill.moduleFormat,
-      generatedAt: Date.now(),
     },
     null,
     2,
   )}\n`;
   const files = [
-    {
-      path: "SKILL.md",
-      content: `${skillMd}\n`,
-      sha256: await computeSha256Hex(`${skillMd}\n`),
-    },
-    {
-      path: scriptRelativePath,
-      content: `${skill.sourceJs.trimEnd()}\n`,
-      sha256: await computeSha256Hex(`${skill.sourceJs.trimEnd()}\n`),
-    },
+    ...bundleFiles,
     {
       path: ".af-global-skill.json",
       content: markerJson,
@@ -3478,9 +3459,83 @@ async function buildGlobalSkillMaterialization(skill: {
   return { skillDirName, files };
 }
 
+async function normalizeGlobalSkillBundleFiles(
+  rawFiles: Array<{
+    path: string;
+    content: string;
+    sha256: string;
+  }>,
+  moduleFormat: "esm" | "cjs",
+): Promise<Array<{
+  path: string;
+  content: string;
+  sha256: string;
+}>> {
+  if (!Array.isArray(rawFiles) || rawFiles.length === 0) {
+    throw new Error("Global skill bundle must contain at least one file.");
+  }
+
+  const byPath = new Map<string, { path: string; content: string; sha256: string }>();
+  let totalBytes = 0;
+  for (const rawFile of rawFiles) {
+    const path = normalizeRelativePath(rawFile.path);
+    if (path === ".af-global-skill.json") {
+      throw new Error("Bundle files must not include .af-global-skill.json.");
+    }
+    if (byPath.has(path)) {
+      throw new Error(`Duplicate bundle file path: ${path}`);
+    }
+    const content = typeof rawFile.content === "string" ? rawFile.content : "";
+    totalBytes += new TextEncoder().encode(content).length;
+    if (totalBytes > 200_000) {
+      throw new Error("Global skill bundle too large (max 200KB).");
+    }
+    const sha256 = typeof rawFile.sha256 === "string" ? rawFile.sha256.trim() : "";
+    if (!sha256) {
+      throw new Error(`Missing bundle checksum for ${path}.`);
+    }
+    const computedSha = await computeSha256Hex(content);
+    if (computedSha !== sha256) {
+      throw new Error(`Global skill checksum mismatch for ${path}.`);
+    }
+    byPath.set(path, { path, content, sha256 });
+  }
+
+  const entryScriptPath = `scripts/index.${moduleFormat === "cjs" ? "cjs" : "mjs"}`;
+  if (!byPath.has("SKILL.md")) {
+    throw new Error("Global skill bundle must include SKILL.md.");
+  }
+  if (!byPath.has(entryScriptPath)) {
+    throw new Error(`Global skill bundle must include ${entryScriptPath}.`);
+  }
+
+  return [...byPath.values()].sort((left, right) => left.path.localeCompare(right.path));
+}
+
+async function computeGlobalSkillBundleSha256(
+  files: Array<{
+    path: string;
+    content: string;
+    sha256: string;
+  }>,
+): Promise<string> {
+  const fingerprint = files
+    .map((file) => `${file.path}\n${file.sha256}\n${file.content}`)
+    .join("\n---\n");
+  return await computeSha256Hex(fingerprint);
+}
+
 function normalizeGlobalSkillDirName(slug: string): string {
   const normalized = slug.trim().toLowerCase().replace(/[^a-z0-9-_]/g, "-");
   return normalized.length > 0 ? normalized : "unnamed-skill";
+}
+
+function normalizeRelativePath(value: string): string {
+  const normalized = String(value || "").replaceAll("\\", "/").replace(/^\/+/, "");
+  if (!normalized || normalized === "." || normalized.includes("../")) {
+    throw new Error(`invalid_relative_path:${value}`);
+  }
+  return normalized;
 }
 
 function getBridgeSecretRefsForProfile(
