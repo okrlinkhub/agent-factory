@@ -410,6 +410,21 @@ export default defineSchema({
     .index("by_companyId_and_templateKey", ["companyId", "templateKey"])
     .index("by_companyId_and_enabled", ["companyId", "enabled"]),
 
+  messageTemplates: defineTable({
+    templateKey: v.string(),
+    title: v.string(),
+    text: v.string(),
+    tags: v.array(v.string()),
+    usageCount: v.number(),
+    enabled: v.boolean(),
+    createdBy: v.string(),
+    updatedBy: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_templateKey", ["templateKey"])
+    .index("by_enabled", ["enabled"]),
+
   messagePushJobs: defineTable({
     companyId: v.string(),
     consumerUserId: v.string(),

@@ -81,6 +81,14 @@ const messageRuntimeConfigValidator = v.object({
   telegramAttachmentRetentionMs: v.optional(v.number()),
 });
 
+const messageTemplateValidator = v.object({
+  title: v.string(),
+  text: v.string(),
+  tags: v.array(v.string()),
+  enabled: v.optional(v.boolean()),
+  actorUserId: v.string(),
+});
+
 const globalSkillManifestFileValidator = v.object({
   path: v.string(),
   content: v.string(),
@@ -153,6 +161,46 @@ export function exposeApi(
         await options.auth(ctx, { type: "write" });
         await ctx.runMutation((component.queue as any).setMessageRuntimeConfig, args);
         return null;
+      },
+    }),
+    createMessageTemplate: mutationGeneric({
+      args: messageTemplateValidator,
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "write" });
+        return await ctx.runMutation((component.lib as any).createMessageTemplate, args);
+      },
+    }),
+    updateMessageTemplate: mutationGeneric({
+      args: {
+        templateId: v.string(),
+        title: v.optional(v.string()),
+        text: v.optional(v.string()),
+        tags: v.optional(v.array(v.string())),
+        enabled: v.optional(v.boolean()),
+        actorUserId: v.string(),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "write" });
+        return await ctx.runMutation((component.lib as any).updateMessageTemplate, args);
+      },
+    }),
+    deleteMessageTemplate: mutationGeneric({
+      args: {
+        templateId: v.string(),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "write" });
+        return await ctx.runMutation((component.lib as any).deleteMessageTemplate, args);
+      },
+    }),
+    listMessageTemplatesByCompany: queryGeneric({
+      args: {
+        includeDisabled: v.optional(v.boolean()),
+        limit: v.optional(v.number()),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runQuery((component.lib as any).listMessageTemplatesByCompany, args);
       },
     }),
     enqueue: mutationGeneric({
@@ -935,6 +983,24 @@ export function exposeApi(
         });
       },
     }),
+    sendMessageTemplateToUserAgent: mutationGeneric({
+      args: {
+        consumerUserId: v.string(),
+        agentKey: v.string(),
+        templateId: v.string(),
+        metadata: v.optional(v.record(v.string(), v.string())),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, {
+          type: "write",
+          agentKey: args.agentKey,
+        });
+        return await ctx.runMutation((component.lib as any).sendMessageTemplateToUserAgent, {
+          ...args,
+          providerConfig: options.providerConfig,
+        });
+      },
+    }),
     listSnapshotsForConversation: queryGeneric({
       args: {
         conversationId: v.string(),
@@ -1302,7 +1368,8 @@ export function registerRoutes(
           new Set(attachmentCandidates.map((attachment) => attachment.kind)),
         ).join("+");
         for (const attachment of attachmentCandidates) {
-          const metadataKey = `telegram${attachment.kind[0].toUpperCase()}${attachment.kind.slice(1)}FileId`;
+          const [firstLetter = ""] = attachment.kind;
+          const metadataKey = `telegram${firstLetter.toUpperCase()}${attachment.kind.slice(1)}FileId`;
           metadata[metadataKey] = attachment.telegramFileId;
         }
       }
@@ -1337,7 +1404,7 @@ export function registerRoutes(
 
 function parseStartCommandCode(messageText: string): string | null {
   const match = messageText.match(/^\/start(?:@\w+)?\s+([A-Za-z0-9_-]{4,128})\s*$/);
-  return match ? match[1] : null;
+  return match?.[1] ?? null;
 }
 
 type TelegramWebhookMessage = {

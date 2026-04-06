@@ -11,6 +11,7 @@
 import type * as config from "../config.js";
 import type * as identity from "../identity.js";
 import type * as lib from "../lib.js";
+import type * as messageTemplates from "../messageTemplates.js";
 import type * as providers_fly from "../providers/fly.js";
 import type * as pushing from "../pushing.js";
 import type * as queue from "../queue.js";
@@ -28,6 +29,7 @@ const fullApi: ApiFromModules<{
   config: typeof config;
   identity: typeof identity;
   lib: typeof lib;
+  messageTemplates: typeof messageTemplates;
   "providers/fly": typeof providers_fly;
   pushing: typeof pushing;
   queue: typeof queue;

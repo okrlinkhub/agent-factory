@@ -23,6 +23,7 @@ export {
   listQueueItemsForUserAgent,
   getConversationViewForUserAgent,
   sendMessageToUserAgent,
+  sendMessageTemplateToUserAgent,
   listSnapshotsForConversation,
   listSnapshotsForUserAgent,
   getLatestSnapshotForUserAgent,
@@ -58,6 +59,13 @@ export {
   getAgentOperationalReadiness,
   getWebhookReadiness,
 } from "./identity.js";
+
+export {
+  createMessageTemplate,
+  updateMessageTemplate,
+  deleteMessageTemplate,
+  listMessageTemplatesByCompany,
+} from "./messageTemplates.js";
 
 export {
   createPushTemplate,

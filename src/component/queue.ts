@@ -2013,6 +2013,67 @@ export const sendMessageToUserAgent = mutation({
   },
 });
 
+export const sendMessageTemplateToUserAgent = mutation({
+  args: {
+    consumerUserId: v.string(),
+    agentKey: v.string(),
+    templateId: v.id("messageTemplates"),
+    metadata: v.optional(v.record(v.string(), v.string())),
+    nowMs: v.optional(v.number()),
+    providerConfig: v.optional(providerConfigValidator),
+  },
+  returns: v.object({
+    messageId: v.id("messageQueue"),
+    usageCount: v.number(),
+  }),
+  handler: async (ctx, args) => {
+    const template = await ctx.db.get(args.templateId);
+    if (!template || !template.enabled) {
+      throw new Error("Message template not found");
+    }
+
+    const nowMs = args.nowMs ?? Date.now();
+    const target = await resolveConversationTargetForUserAgent(
+      ctx,
+      args.consumerUserId,
+      args.agentKey,
+      true,
+    );
+    const providerUserId =
+      target.telegramUserId ?? target.telegramChatId ?? args.consumerUserId;
+    const usageCount = template.usageCount + 1;
+    const messageId = await enqueueMessageRecord(ctx, {
+      conversationId: target.conversationId,
+      agentKey: args.agentKey,
+      payload: {
+        provider: target.provider,
+        providerUserId,
+        messageText: template.text,
+        metadata: {
+          ...(args.metadata ?? {}),
+          consumerUserId: args.consumerUserId,
+          source: "message_template",
+          templateId: String(template._id),
+          templateKey: template.templateKey,
+          ...(target.telegramChatId ? { telegramChatId: target.telegramChatId } : {}),
+          ...(target.telegramUserId ? { telegramUserId: target.telegramUserId } : {}),
+        },
+      },
+      scheduledFor: nowMs,
+      providerConfig: args.providerConfig,
+    });
+
+    await ctx.db.patch(template._id, {
+      usageCount,
+    });
+
+    return {
+      messageId,
+      usageCount,
+    };
+  },
+});
+
 export const listSnapshotsForConversation = query({
   args: {
     conversationId: v.string(),

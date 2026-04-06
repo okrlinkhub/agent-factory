@@ -201,6 +201,131 @@ describe("component lib", () => {
     expect(claim?.payload.messageText).toBe("hello");
   });
 
+  test("message templates should normalize tags and auto-generate key", async () => {
+    const t = initConvexTest();
+
+    const templateId = await t.mutation(api.lib.createMessageTemplate, {
+      title: "  Status Update ",
+      text: "  Share your latest progress. ",
+      tags: [" Urgent ", "follow-up", "urgent", " Team "],
+      actorUserId: "user-admin-1",
+    });
+
+    expect(templateId).toBeDefined();
+
+    const templates = await t.query(api.lib.listMessageTemplatesByCompany, {
+      includeDisabled: true,
+    });
+
+    expect(templates).toHaveLength(1);
+    expect(templates[0]).toMatchObject({
+      templateKey: "status-update",
+      title: "Status Update",
+      text: "Share your latest progress.",
+      tags: ["follow-up", "team", "urgent"],
+      usageCount: 0,
+      enabled: true,
+    });
+  });
+
+  test("message templates should generate a unique key globally", async () => {
+    const t = initConvexTest();
+
+    const firstTemplateId = await t.mutation(api.lib.createMessageTemplate, {
+      title: "Daily check-in",
+      text: "Share your update.",
+      tags: [],
+      actorUserId: "user-admin-1",
+    });
+
+    const secondTemplateId = await t.mutation(api.lib.createMessageTemplate, {
+      title: "Daily check-in",
+      text: "Duplicate title",
+      tags: [],
+      actorUserId: "user-admin-2",
+    });
+
+    const templates = await t.query(api.lib.listMessageTemplatesByCompany, {
+      includeDisabled: true,
+    });
+
+    expect(firstTemplateId).toBeDefined();
+    expect(secondTemplateId).toBeDefined();
+    expect(templates.map((template) => template.templateKey).sort()).toEqual([
+      "daily-check-in",
+      "daily-check-in-2",
+    ]);
+  });
+
+  test("message templates should track usage and surface most used templates first", async () => {
+    const t = initConvexTest();
+    await t.mutation(api.queue.upsertAgentProfile, {
+      agentKey: "template-agent",
+      version: "1.0.0",
+      secretsRef: [],
+      enabled: true,
+    });
+    await t.mutation(api.lib.bindUserAgent, {
+      consumerUserId: "user-template-1",
+      agentKey: "template-agent",
+      source: "manual",
+      metadata: { companyId: "co-templates" },
+    });
+
+    const firstTemplateId = await t.mutation(api.lib.createMessageTemplate, {
+      title: "Weekly recap",
+      text: "Condividi il recap della settimana.",
+      tags: ["weekly", "recap"],
+      actorUserId: "user-admin-1",
+    });
+    const secondTemplateId = await t.mutation(api.lib.createMessageTemplate, {
+      title: "Quick nudge",
+      text: "Mandami un aggiornamento rapido.",
+      tags: ["follow-up"],
+      actorUserId: "user-admin-1",
+    });
+
+    await t.mutation((api.lib as any).sendMessageTemplateToUserAgent, {
+      consumerUserId: "user-template-1",
+      agentKey: "template-agent",
+      templateId: firstTemplateId,
+    });
+    await t.mutation((api.lib as any).sendMessageTemplateToUserAgent, {
+      consumerUserId: "user-template-1",
+      agentKey: "template-agent",
+      templateId: firstTemplateId,
+    });
+    await t.mutation((api.lib as any).sendMessageTemplateToUserAgent, {
+      consumerUserId: "user-template-1",
+      agentKey: "template-agent",
+      templateId: secondTemplateId,
+    });
+
+    const templates = await t.query(api.lib.listMessageTemplatesByCompany, {
+      includeDisabled: true,
+    });
+
+    expect(templates.map((template) => ({
+      title: template.title,
+      usageCount: template.usageCount,
+    }))).toEqual([
+      { title: "Weekly recap", usageCount: 2 },
+      { title: "Quick nudge", usageCount: 1 },
+    ]);
+
+    const queuedItems = await t.query(api.lib.listQueueItemsForUserAgent, {
+      consumerUserId: "user-template-1",
+      agentKey: "template-agent",
+      limit: 10,
+    });
+    expect(queuedItems).toHaveLength(3);
+    expect(queuedItems.map((item) => item.payload.messageText).sort()).toEqual([
+      "Condividi il recap della settimana.",
+      "Condividi il recap della settimana.",
+      "Mandami un aggiornamento rapido.",
+    ].sort());
+  });
+
   test("message runtime config should store telegram attachment retention", async () => {
     const t = initConvexTest();
     await t.mutation(api.lib.setMessageRuntimeConfig, {

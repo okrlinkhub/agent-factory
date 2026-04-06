@@ -583,6 +583,20 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         },
         Name
       >;
+      createMessageTemplate: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          actorUserId: string;
+          enabled?: boolean;
+          nowMs?: number;
+          tags: Array<string>;
+          text: string;
+          title: string;
+        },
+        string,
+        Name
+      >;
       createPairingCode: FunctionReference<
         "mutation",
         "internal",
@@ -738,6 +752,13 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "internal",
         { appName: string; flyApiToken?: string; volumeId: string },
         { message: string; ok: boolean; status: number },
+        Name
+      >;
+      deleteMessageTemplate: FunctionReference<
+        "mutation",
+        "internal",
+        { templateId: string },
+        boolean,
         Name
       >;
       deletePushJob: FunctionReference<
@@ -1253,6 +1274,25 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         { secretId: string; secretRef: string; version: number },
         Name
       >;
+      listMessageTemplatesByCompany: FunctionReference<
+        "query",
+        "internal",
+        { includeDisabled?: boolean; limit?: number },
+        Array<{
+          _id: string;
+          createdAt: number;
+          createdBy: string;
+          enabled: boolean;
+          tags: Array<string>;
+          templateKey: string;
+          text: string;
+          title: string;
+          updatedAt: number;
+          updatedBy: string;
+          usageCount: number;
+        }>,
+        Name
+      >;
       listPushDispatchesByJob: FunctionReference<
         "query",
         "internal",
@@ -1632,6 +1672,29 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         },
         Name
       >;
+      sendMessageTemplateToUserAgent: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          agentKey: string;
+          consumerUserId: string;
+          metadata?: Record<string, string>;
+          nowMs?: number;
+          providerConfig?: {
+            appName: string;
+            image: string;
+            kind: "fly" | "runpod" | "ecs";
+            organizationSlug: string;
+            region: string;
+            volumeName: string;
+            volumePath: string;
+            volumeSizeGb: number;
+          };
+          templateId: string;
+        },
+        { messageId: string; usageCount: number },
+        Name
+      >;
       sendMessageToUserAgent: FunctionReference<
         "mutation",
         "internal",
@@ -1736,6 +1799,21 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         { enqueuedMessageId: string; runKey: string },
         Name
       >;
+      updateMessageTemplate: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          actorUserId: string;
+          enabled?: boolean;
+          nowMs?: number;
+          tags?: Array<string>;
+          templateId: string;
+          text?: string;
+          title?: string;
+        },
+        boolean,
+        Name
+      >;
       updatePushJob: FunctionReference<
         "mutation",
         "internal",
@@ -1814,6 +1892,63 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             workerId: string;
           }>;
         },
+        Name
+      >;
+    };
+    messageTemplates: {
+      createMessageTemplate: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          actorUserId: string;
+          enabled?: boolean;
+          nowMs?: number;
+          tags: Array<string>;
+          text: string;
+          title: string;
+        },
+        string,
+        Name
+      >;
+      deleteMessageTemplate: FunctionReference<
+        "mutation",
+        "internal",
+        { templateId: string },
+        boolean,
+        Name
+      >;
+      listMessageTemplatesByCompany: FunctionReference<
+        "query",
+        "internal",
+        { includeDisabled?: boolean; limit?: number },
+        Array<{
+          _id: string;
+          createdAt: number;
+          createdBy: string;
+          enabled: boolean;
+          tags: Array<string>;
+          templateKey: string;
+          text: string;
+          title: string;
+          updatedAt: number;
+          updatedBy: string;
+          usageCount: number;
+        }>,
+        Name
+      >;
+      updateMessageTemplate: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          actorUserId: string;
+          enabled?: boolean;
+          nowMs?: number;
+          tags?: Array<string>;
+          templateId: string;
+          text?: string;
+          title?: string;
+        },
+        boolean,
         Name
       >;
     };
@@ -2947,6 +3082,29 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "internal",
         { limit?: number; nowMs?: number },
         { requeued: number; unlocked: number },
+        Name
+      >;
+      sendMessageTemplateToUserAgent: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          agentKey: string;
+          consumerUserId: string;
+          metadata?: Record<string, string>;
+          nowMs?: number;
+          providerConfig?: {
+            appName: string;
+            image: string;
+            kind: "fly" | "runpod" | "ecs";
+            organizationSlug: string;
+            region: string;
+            volumeName: string;
+            volumePath: string;
+            volumeSizeGb: number;
+          };
+          templateId: string;
+        },
+        { messageId: string; usageCount: number },
         Name
       >;
       sendMessageToUserAgent: FunctionReference<
