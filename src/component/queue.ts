@@ -188,6 +188,11 @@ const workerSpawnOpenClawEnvValidator = v.object({
   OPENCLAW_LINKING_SHARED_SECRET: v.optional(v.string()),
 });
 
+const schedulerConversationTargetValidator = v.object({
+  conversationId: v.string(),
+  agentKey: v.string(),
+});
+
 const messageRuntimeConfigValidator = v.object({
   systemPrompt: v.optional(v.string()),
   telegramAttachmentRetentionMs: v.optional(v.number()),
@@ -486,6 +491,47 @@ export const getWorkerSpawnOpenClawEnv = internalQuery({
       env.OPENCLAW_LINKING_SHARED_SECRET = globalLinkingSharedSecret;
     }
     return env;
+  },
+});
+
+export const getActiveConversationsForScheduler = internalQuery({
+  args: {
+    nowMs: v.optional(v.number()),
+    limit: v.optional(v.number()),
+  },
+  returns: v.array(schedulerConversationTargetValidator),
+  handler: async (ctx, args) => {
+    const nowMs = args.nowMs ?? Date.now();
+    const limit = Math.max(1, args.limit ?? 1000);
+    const queuedJobs = await ctx.db
+      .query("messageQueue")
+      .withIndex("by_status_and_scheduledFor", (q) =>
+        q.eq("status", "queued").lte("scheduledFor", nowMs),
+      )
+      .take(limit);
+    const processingJobs = await ctx.db
+      .query("messageQueue")
+      .withIndex("by_status_and_leaseExpiresAt", (q) =>
+        q.eq("status", "processing").gt("leaseExpiresAt", nowMs),
+      )
+      .take(limit);
+
+    const conversations = new Map<string, { conversationId: string; agentKey: string }>();
+    for (const job of [...queuedJobs, ...processingJobs]) {
+      const key = `${job.agentKey}::${job.conversationId}`;
+      if (!conversations.has(key)) {
+        conversations.set(key, {
+          conversationId: job.conversationId,
+          agentKey: job.agentKey,
+        });
+      }
+    }
+
+    return Array.from(conversations.values()).sort(
+      (left, right) =>
+        left.agentKey.localeCompare(right.agentKey) ||
+        left.conversationId.localeCompare(right.conversationId),
+    );
   },
 });
 
@@ -2277,6 +2323,7 @@ export const upsertWorkerState = internalMutation({
     machineId: v.optional(v.string()),
     appName: v.optional(v.string()),
     region: v.optional(v.string()),
+    assignment: v.optional(v.union(v.null(), workerAssignmentValidator)),
     clearLastSnapshotId: v.optional(v.boolean()),
     clearMachineRef: v.optional(v.boolean()),
   },
@@ -2299,7 +2346,7 @@ export const upsertWorkerState = internalMutation({
           args.status === "stopped" || args.status === "stopping"
             ? (args.stoppedAt ?? nowMs)
             : undefined,
-        assignment: undefined,
+        assignment: args.assignment ?? undefined,
         machineRef:
           args.machineId && args.appName
             ? {
@@ -2329,7 +2376,7 @@ export const upsertWorkerState = internalMutation({
           ? (args.stoppedAt ?? worker.stoppedAt ?? nowMs)
           : undefined,
       lastSnapshotId: args.clearLastSnapshotId ? undefined : worker.lastSnapshotId,
-      assignment: worker.assignment,
+      assignment: args.assignment === undefined ? worker.assignment : (args.assignment ?? undefined),
       machineRef:
         args.clearMachineRef
           ? undefined

@@ -75,6 +75,11 @@ type SchedulerWorkerRow = {
   region: string | null;
 };
 
+type SchedulerConversationTarget = {
+  conversationId: string;
+  agentKey: string;
+};
+
 const PROVIDER_RECONCILE_GRACE_MS = 90_000;
 
 export const reconcileWorkerPool = action({
@@ -182,11 +187,11 @@ async function runReconcileWorkerPool(
   }
   const workspaceId = args.workspaceId ?? "default";
   const provider = resolveProvider(providerConfig.kind, flyApiToken);
-  const activeConversationIds: Array<string> = await ctx.runQuery(
-    (internal.queue as any).getActiveConversationIdsForScheduler,
+  const activeConversations: Array<SchedulerConversationTarget> = await ctx.runQuery(
+    (internal.queue as any).getActiveConversationsForScheduler,
     { nowMs, limit: 1000 },
   );
-  const activeConversationCount = activeConversationIds.length;
+  const activeConversationCount = activeConversations.length;
   const cycle = await runWorkerLifecycleCycle(ctx, {
     nowMs,
     provider,
@@ -195,7 +200,7 @@ async function runReconcileWorkerPool(
     allowSpawn: true,
     convexUrl,
     workspaceId,
-    activeConversationIds,
+    activeConversations,
     desiredActiveWorkers: clamp(activeConversationCount, 0, scaling.maxWorkers),
   });
   if (activeConversationCount > 0 || cycle.pending > 0) {
@@ -258,7 +263,7 @@ async function runEnforceIdleShutdowns(
     scaling: DEFAULT_CONFIG.scaling,
     allowSpawn: false,
     desiredActiveWorkers: 0,
-    activeConversationIds: [],
+    activeConversations: [],
   });
 
   if (cycle.pending > 0) {
@@ -282,7 +287,7 @@ async function runWorkerLifecycleCycle(
     scaling: typeof DEFAULT_CONFIG.scaling;
     allowSpawn: boolean;
     desiredActiveWorkers: number;
-    activeConversationIds: Array<string>;
+    activeConversations: Array<SchedulerConversationTarget>;
     convexUrl?: string;
     workspaceId?: string;
   },
@@ -338,7 +343,7 @@ async function runWorkerLifecycleCycle(
   if (input.allowSpawn && input.desiredActiveWorkers > 0) {
     const claimableWorkers = countWorkersAvailableForActiveConversations(
       filterScopedWorkers(workerRows, input.providerConfig.appName),
-      input.activeConversationIds,
+      input.activeConversations,
       staleHeartbeatCutoff,
     );
     if (input.desiredActiveWorkers > claimableWorkers) {
@@ -350,8 +355,23 @@ async function runWorkerLifecycleCycle(
         input.scaling.spawnStep,
         input.desiredActiveWorkers - claimableWorkers,
       );
+      const spawnTargets = selectSpawnTargetsForActiveConversations(
+        filterScopedWorkers(workerRows, input.providerConfig.appName),
+        input.activeConversations,
+        staleHeartbeatCutoff,
+        toSpawn,
+      );
       for (let index = 0; index < toSpawn; index += 1) {
         const workerId = `afw-${input.nowMs}-${index}`;
+        const target = spawnTargets[index];
+        const assignment = target
+          ? {
+              conversationId: target.conversationId,
+              agentKey: target.agentKey,
+              leaseId: `spawn:${workerId}`,
+              assignedAt: input.nowMs,
+            }
+          : undefined;
         await ctx.runMutation(internal.queue.upsertWorkerState, {
           workerId,
           provider: input.providerConfig.kind,
@@ -359,6 +379,7 @@ async function runWorkerLifecycleCycle(
           load: 0,
           nowMs: input.nowMs,
           scheduledShutdownAt: input.nowMs + input.scaling.idleTimeoutMs,
+          assignment,
         });
         let created;
         try {
@@ -377,6 +398,8 @@ async function runWorkerLifecycleCycle(
               WORKSPACE_ID: input.workspaceId ?? "default",
               WORKER_ID: workerId,
               WORKER_IDLE_TIMEOUT_MS: String(input.scaling.idleTimeoutMs),
+              OPENCLAW_AGENT_KEY: target?.agentKey,
+              OPENCLAW_CONVERSATION_ID: target?.conversationId,
             }),
           });
         } catch (error) {
@@ -456,6 +479,7 @@ async function runWorkerLifecycleCycle(
           machineId: created.machineId,
           appName: input.providerConfig.appName,
           region: created.region,
+          assignment,
         });
         await scheduleIdleShutdownWatch(
           ctx,
@@ -862,10 +886,46 @@ function filterScopedWorkers(workerRows: Array<SchedulerWorkerRow>, appName: str
 
 function countWorkersAvailableForActiveConversations(
   workerRows: Array<SchedulerWorkerRow>,
-  activeConversationIds: Array<string>,
+  activeConversations: Array<SchedulerConversationTarget>,
   staleHeartbeatCutoff: number,
 ) {
-  const activeConversationSet = new Set(activeConversationIds);
+  const coverage = summarizeWorkerConversationCoverage(
+    workerRows,
+    activeConversations,
+    staleHeartbeatCutoff,
+  );
+  return coverage.unassignedWorkers + coverage.assignedConversationKeys.size;
+}
+
+function selectSpawnTargetsForActiveConversations(
+  workerRows: Array<SchedulerWorkerRow>,
+  activeConversations: Array<SchedulerConversationTarget>,
+  staleHeartbeatCutoff: number,
+  limit: number,
+) {
+  const coverage = summarizeWorkerConversationCoverage(
+    workerRows,
+    activeConversations,
+    staleHeartbeatCutoff,
+  );
+  const uncoveredConversations = activeConversations.filter(
+    (conversation) =>
+      !coverage.assignedConversationKeys.has(getConversationTargetKey(conversation)),
+  );
+  return uncoveredConversations.slice(
+    coverage.unassignedWorkers,
+    coverage.unassignedWorkers + Math.max(0, limit),
+  );
+}
+
+function summarizeWorkerConversationCoverage(
+  workerRows: Array<SchedulerWorkerRow>,
+  activeConversations: Array<SchedulerConversationTarget>,
+  staleHeartbeatCutoff: number,
+) {
+  const activeConversationSet = new Set(
+    activeConversations.map((conversation) => getConversationTargetKey(conversation)),
+  );
   const assignedConversationKeys = new Set<string>();
   let unassignedWorkers = 0;
   for (const worker of workerRows) {
@@ -876,13 +936,16 @@ function countWorkersAvailableForActiveConversations(
       unassignedWorkers += 1;
       continue;
     }
-    if (activeConversationSet.has(worker.assignment.conversationId)) {
-      assignedConversationKeys.add(
-        `${worker.assignment.agentKey}::${worker.assignment.conversationId}`,
-      );
+    const assignmentKey = getConversationTargetKey(worker.assignment);
+    if (activeConversationSet.has(assignmentKey)) {
+      assignedConversationKeys.add(assignmentKey);
     }
   }
-  return unassignedWorkers + assignedConversationKeys.size;
+  return { assignedConversationKeys, unassignedWorkers };
+}
+
+function getConversationTargetKey(input: { conversationId: string; agentKey: string }) {
+  return `${input.agentKey}::${input.conversationId}`;
 }
 
 function deriveScheduledShutdownAt(

@@ -1248,6 +1248,14 @@ describe("component lib", () => {
     const t = initConvexTest();
     const nowMs = Date.UTC(2026, 0, 1, 17, 0, 0);
     vi.setSystemTime(nowMs);
+    let machineCreateBody:
+      | {
+          name?: string;
+          config?: {
+            env?: Record<string, string>;
+          };
+        }
+      | null = null;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const method = init?.method ?? "GET";
@@ -1273,7 +1281,13 @@ describe("component lib", () => {
         });
       }
       if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/machines`) && method === "POST") {
-        const body = JSON.parse(String(init?.body ?? "{}")) as { name?: string };
+        const body = JSON.parse(String(init?.body ?? "{}")) as {
+          name?: string;
+          config?: {
+            env?: Record<string, string>;
+          };
+        };
+        machineCreateBody = body;
         return jsonResponse({
           id: "machine-new-worker",
           name: body.name,
@@ -1349,6 +1363,28 @@ describe("component lib", () => {
 
     expect(reconcile.spawned).toBe(1);
     expect(reconcile.activeWorkers).toBe(2);
+    const machineCreateEnv = (
+      machineCreateBody as
+        | {
+            config?: {
+              env?: Record<string, string>;
+            };
+          }
+        | null
+    )?.config?.env;
+    expect(machineCreateEnv?.OPENCLAW_CONVERSATION_ID).toBe("telegram:chat:spawn-b");
+    expect(machineCreateEnv?.OPENCLAW_AGENT_KEY).toBe("support-agent");
+
+    const workers = await t.query((internal.queue as any).listWorkersForScheduler, {});
+    const spawnedWorker = workers.find(
+      (row: { workerId: string }) => row.workerId === `afw-${nowMs}-0`,
+    );
+    expect(spawnedWorker?.assignment).toEqual({
+      conversationId: "telegram:chat:spawn-b",
+      agentKey: "support-agent",
+      leaseId: `spawn:afw-${nowMs}-0`,
+      assignedAt: nowMs,
+    });
   });
 
   test("scheduler should forward OpenClaw bridge env to spawned machines", async () => {
@@ -1621,6 +1657,60 @@ describe("component lib", () => {
       leaseId: firstClaim?.leaseId ?? "",
       assignedAt: nowMs,
     });
+  });
+
+  test("preassigned workers should claim only their assigned conversation on first claim", async () => {
+    const t = initConvexTest();
+    const nowMs = Date.UTC(2026, 0, 1, 17, 35, 0);
+    vi.setSystemTime(nowMs);
+    await t.mutation(api.queue.upsertAgentProfile, {
+      agentKey: "support-agent",
+      version: "1.0.0",
+      secretsRef: [],
+      enabled: true,
+    });
+
+    await t.mutation(api.queue.enqueueMessage, {
+      conversationId: "telegram:chat:preassign-a",
+      agentKey: "support-agent",
+      payload: {
+        provider: "telegram",
+        providerUserId: "u-preassign-a",
+        messageText: "first",
+      },
+      nowMs,
+    });
+    const messageB = await t.mutation(api.queue.enqueueMessage, {
+      conversationId: "telegram:chat:preassign-b",
+      agentKey: "support-agent",
+      payload: {
+        provider: "telegram",
+        providerUserId: "u-preassign-b",
+        messageText: "second",
+      },
+      nowMs: nowMs + 1,
+    });
+
+    await t.mutation(internal.queue.upsertWorkerState, {
+      workerId: "worker-preassigned-1",
+      provider: "fly",
+      status: "active",
+      load: 0,
+      nowMs,
+      assignment: {
+        conversationId: "telegram:chat:preassign-b",
+        agentKey: "support-agent",
+        leaseId: "spawn:worker-preassigned-1",
+        assignedAt: nowMs,
+      },
+    });
+
+    const claim = await t.mutation(api.lib.claim, {
+      workerId: "worker-preassigned-1",
+      nowMs: nowMs + 10,
+    });
+    expect(claim?.messageId).toBe(messageB);
+    expect(claim?.conversationId).toBe("telegram:chat:preassign-b");
   });
 
   test("exclusive ownership should block another worker and let the owner reclaim", async () => {
