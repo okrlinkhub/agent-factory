@@ -10,9 +10,8 @@ export type SpawnWorkerInput = {
   appName: string;
   image: string;
   region: string;
-  volumeName: string;
+  volumeId: string;
   volumePath: string;
-  volumeSizeGb: number;
   cpuKind?: string;
   cpus?: number;
   memoryMb?: number;
@@ -22,13 +21,27 @@ export type SpawnWorkerInput = {
 export type ProviderWorker = {
   workerId: string;
   machineId: string;
+  volumeId?: string;
   region?: string;
   image?: string;
   status: WorkerProviderStatus;
   rawState?: string;
 };
 
+export type WorkerVolume = {
+  volumeId: string;
+  volumeName: string;
+  region?: string;
+};
+
 export interface WorkerProvider {
+  ensureWorkerVolume(input: {
+    appName: string;
+    workerId: string;
+    region: string;
+    volumeName: string;
+    volumeSizeGb: number;
+  }): Promise<WorkerVolume>;
   spawnWorker(input: SpawnWorkerInput): Promise<ProviderWorker>;
   listWorkers(appName: string): Promise<Array<ProviderWorker>>;
   terminateWorker(appName: string, machineId: string): Promise<void>;
@@ -40,6 +53,7 @@ export interface WorkerProvider {
     machineId?: string | null;
     region?: string;
     volumeName: string;
+    volumeId?: string | null;
   }): Promise<void>;
 }
 
@@ -72,7 +86,14 @@ export class FlyMachinesProvider implements WorkerProvider {
     private readonly baseUrl: string = "https://api.machines.dev/v1",
   ) {}
 
-  async spawnWorker(input: SpawnWorkerInput): Promise<ProviderWorker> {
+  async ensureWorkerVolume(input: {
+    appName: string;
+    workerId: string;
+    region: string;
+    volumeName: string;
+    volumeSizeGb: number;
+  }): Promise<WorkerVolume> {
+    const volumeName = buildDedicatedVolumeName(input.volumeName, input.workerId);
     const volumeId = await this.resolveOrCreateVolumeId(
       input.appName,
       input.volumeName,
@@ -80,6 +101,14 @@ export class FlyMachinesProvider implements WorkerProvider {
       input.region,
       input.volumeSizeGb,
     );
+    return {
+      volumeId,
+      volumeName,
+      region: input.region,
+    };
+  }
+
+  async spawnWorker(input: SpawnWorkerInput): Promise<ProviderWorker> {
     const payload = {
       name: input.workerId,
       region: input.region,
@@ -92,7 +121,7 @@ export class FlyMachinesProvider implements WorkerProvider {
         },
         mounts: [
           {
-            volume: volumeId,
+            volume: input.volumeId,
             path: input.volumePath,
           } satisfies FlyMachineMount,
         ],
@@ -110,6 +139,7 @@ export class FlyMachinesProvider implements WorkerProvider {
     return {
       workerId: input.workerId,
       machineId: machine.id,
+      volumeId: input.volumeId,
       region: machine.region ?? input.region,
       image: machine.config?.image_ref ?? machine.config?.image ?? input.image,
       status: mapFlyStateToProviderStatus(machine.state),
@@ -182,9 +212,13 @@ export class FlyMachinesProvider implements WorkerProvider {
     machineId?: string | null;
     region?: string;
     volumeName: string;
+    volumeId?: string | null;
   }): Promise<void> {
     const volumeIds = new Set<string>();
-    if (input.machineId) {
+    if (input.volumeId) {
+      volumeIds.add(input.volumeId);
+    }
+    if (!input.volumeId && input.machineId) {
       const machineVolumeIds = await this.getMachineVolumeIds(input.appName, input.machineId);
       for (const volumeId of machineVolumeIds) {
         volumeIds.add(volumeId);

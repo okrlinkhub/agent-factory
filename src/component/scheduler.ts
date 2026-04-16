@@ -73,6 +73,7 @@ type SchedulerWorkerRow = {
   machineId: string | null;
   appName: string | null;
   region: string | null;
+  volumeId: string | null;
 };
 
 type SchedulerConversationTarget = {
@@ -372,6 +373,13 @@ async function runWorkerLifecycleCycle(
               assignedAt: input.nowMs,
             }
           : undefined;
+        const workerVolume = await input.provider.ensureWorkerVolume({
+          appName: input.providerConfig.appName,
+          workerId,
+          region: input.providerConfig.region,
+          volumeName: input.providerConfig.volumeName,
+          volumeSizeGb: input.providerConfig.volumeSizeGb,
+        });
         await ctx.runMutation(internal.queue.upsertWorkerState, {
           workerId,
           provider: input.providerConfig.kind,
@@ -379,6 +387,7 @@ async function runWorkerLifecycleCycle(
           load: 0,
           nowMs: input.nowMs,
           scheduledShutdownAt: input.nowMs + input.scaling.idleTimeoutMs,
+          volumeId: workerVolume.volumeId,
           assignment,
         });
         let created;
@@ -388,9 +397,8 @@ async function runWorkerLifecycleCycle(
             appName: input.providerConfig.appName,
             image: input.providerConfig.image,
             region: input.providerConfig.region,
-            volumeName: input.providerConfig.volumeName,
+            volumeId: workerVolume.volumeId,
             volumePath: input.providerConfig.volumePath,
-            volumeSizeGb: input.providerConfig.volumeSizeGb,
             env: compactEnv({
               ...DEFAULT_WORKER_RUNTIME_ENV,
               ...forwardedOpenClawEnv,
@@ -408,6 +416,13 @@ async function runWorkerLifecycleCycle(
               error instanceof Error ? error.message : String(error)
             }`,
           );
+          await input.provider.cleanupWorkerStorage({
+            appName: input.providerConfig.appName,
+            workerId,
+            region: input.providerConfig.region,
+            volumeName: input.providerConfig.volumeName,
+            volumeId: workerVolume.volumeId,
+          });
           await transitionWorkerToDraining(
             ctx,
             {
@@ -423,6 +438,7 @@ async function runWorkerLifecycleCycle(
               machineId: null,
               appName: input.providerConfig.appName,
               region: input.providerConfig.region,
+              volumeId: workerVolume.volumeId,
             },
             input.providerConfig,
             input.nowMs,
@@ -443,6 +459,7 @@ async function runWorkerLifecycleCycle(
               machineId: null,
               appName: input.providerConfig.appName,
               region: input.providerConfig.region,
+              volumeId: workerVolume.volumeId,
             },
             input.providerConfig,
             input.nowMs,
@@ -463,6 +480,7 @@ async function runWorkerLifecycleCycle(
               machineId: null,
               appName: input.providerConfig.appName,
               region: input.providerConfig.region,
+              volumeId: workerVolume.volumeId,
             },
             input.providerConfig,
             input.nowMs,
@@ -479,6 +497,7 @@ async function runWorkerLifecycleCycle(
           machineId: created.machineId,
           appName: input.providerConfig.appName,
           region: created.region,
+          volumeId: created.volumeId ?? workerVolume.volumeId,
           assignment,
         });
         await scheduleIdleShutdownWatch(
@@ -679,6 +698,7 @@ async function transitionWorkerToStopped(
     scheduledShutdownAt: worker.scheduledShutdownAt ?? nowMs,
     stoppedAt: worker.stoppedAt ?? nowMs,
     clearMachineRef: true,
+    clearVolumeId: true,
   });
 }
 
@@ -706,6 +726,7 @@ async function finalizeWorkerTeardown(input: {
     machineId,
     region: input.worker.region ?? input.providerConfig.region,
     volumeName: input.providerConfig.volumeName,
+    volumeId: input.worker.volumeId,
   });
   return true;
 }

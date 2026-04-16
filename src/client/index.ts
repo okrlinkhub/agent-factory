@@ -555,6 +555,22 @@ export function exposeApi(
         return await ctx.runAction((component.lib as any).deleteFlyVolume, args);
       },
     }),
+    runFlyCleanup: actionGeneric({
+      args: {
+        flyApiToken: v.optional(v.string()),
+        machineConcurrency: v.optional(v.number()),
+        volumeConcurrency: v.optional(v.number()),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "read" });
+        return await ctx.runAction((component.lib as any).runFlyCleanup, {
+          flyApiToken: args.flyApiToken,
+          machineConcurrency: args.machineConcurrency,
+          volumeConcurrency: args.volumeConcurrency,
+          providerConfig: options.providerConfig,
+        });
+      },
+    }),
     recoverQueue: actionGeneric({
       args: {
         nowMs: v.optional(v.number()),

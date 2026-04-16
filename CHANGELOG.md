@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.0.3
+
+- Move Fly nightly cleanup into the published component surface as `runFlyCleanup`, leaving consumers with only thin helpers and cron wiring.
+- Persist `volumeId` on worker rows and use it during teardown so worker storage is cleaned up more reliably alongside machine shutdown.
+
 ## 3.0.2
 
 - Improve scheduler worker assignment so newly spawned workers are targeted to uncovered active conversations.

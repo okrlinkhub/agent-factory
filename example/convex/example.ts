@@ -4,7 +4,7 @@ import { exposeApi } from "@okrlinkhub/agent-factory";
 import { v } from "convex/values";
 import { Auth } from "convex/server";
 
-const EXAMPLE_PROVIDER_CONFIG = {
+export const EXAMPLE_PROVIDER_CONFIG = {
   kind: "fly" as const,
   appName: "agent-factory-workers-example",
   organizationSlug: "personal",
@@ -183,6 +183,7 @@ export const {
   importSecret,
   secretStatus,
   startWorkers,
+  runFlyCleanup,
   checkIdleShutdowns,
   deleteFlyVolume,
   recoverQueue,

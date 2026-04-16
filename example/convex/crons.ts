@@ -17,4 +17,11 @@ crons.interval(
   {},
 );
 
+crons.cron(
+  "agent-factory nightly fly cleanup",
+  "0 3 * * *",
+  api.example.runFlyCleanup,
+  {},
+);
+
 export default crons;

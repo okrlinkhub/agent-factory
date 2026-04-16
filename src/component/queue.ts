@@ -2323,9 +2323,11 @@ export const upsertWorkerState = internalMutation({
     machineId: v.optional(v.string()),
     appName: v.optional(v.string()),
     region: v.optional(v.string()),
+    volumeId: v.optional(v.string()),
     assignment: v.optional(v.union(v.null(), workerAssignmentValidator)),
     clearLastSnapshotId: v.optional(v.boolean()),
     clearMachineRef: v.optional(v.boolean()),
+    clearVolumeId: v.optional(v.boolean()),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -2346,6 +2348,7 @@ export const upsertWorkerState = internalMutation({
           args.status === "stopped" || args.status === "stopping"
             ? (args.stoppedAt ?? nowMs)
             : undefined,
+        volumeId: args.volumeId,
         assignment: args.assignment ?? undefined,
         machineRef:
           args.machineId && args.appName
@@ -2376,6 +2379,7 @@ export const upsertWorkerState = internalMutation({
           ? (args.stoppedAt ?? worker.stoppedAt ?? nowMs)
           : undefined,
       lastSnapshotId: args.clearLastSnapshotId ? undefined : worker.lastSnapshotId,
+      volumeId: args.clearVolumeId ? undefined : (args.volumeId ?? worker.volumeId),
       assignment: args.assignment === undefined ? worker.assignment : (args.assignment ?? undefined),
       machineRef:
         args.clearMachineRef
@@ -2595,6 +2599,7 @@ export const listWorkersForScheduler = internalQuery({
       machineId: v.union(v.null(), v.string()),
       appName: v.union(v.null(), v.string()),
       region: v.union(v.null(), v.string()),
+      volumeId: v.union(v.null(), v.string()),
     }),
   ),
   handler: async (ctx) => {
@@ -2612,6 +2617,7 @@ export const listWorkersForScheduler = internalQuery({
       machineId: worker.machineRef?.machineId ?? null,
       appName: worker.machineRef?.appName ?? null,
       region: worker.machineRef?.region ?? null,
+      volumeId: worker.volumeId ?? null,
     }));
   },
 });

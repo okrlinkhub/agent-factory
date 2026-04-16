@@ -34,6 +34,7 @@ export {
   checkIdleShutdowns,
 } from "./scheduler.js";
 export { deleteFlyVolumeManual as deleteFlyVolume } from "./providers/fly.js";
+export { runFlyCleanup } from "./flyCleanup.js";
 
 export {
   bindUserAgent,

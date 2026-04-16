@@ -9,6 +9,7 @@
  */
 
 import type * as config from "../config.js";
+import type * as flyCleanup from "../flyCleanup.js";
 import type * as identity from "../identity.js";
 import type * as lib from "../lib.js";
 import type * as messageTemplates from "../messageTemplates.js";
@@ -27,6 +28,7 @@ import { anyApi, componentsGeneric } from "convex/server";
 
 const fullApi: ApiFromModules<{
   config: typeof config;
+  flyCleanup: typeof flyCleanup;
   identity: typeof identity;
   lib: typeof lib;
   messageTemplates: typeof messageTemplates;

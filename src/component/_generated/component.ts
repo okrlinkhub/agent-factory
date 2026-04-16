@@ -23,6 +23,43 @@ import type { FunctionReference } from "convex/server";
  */
 export type ComponentApi<Name extends string | undefined = string | undefined> =
   {
+    flyCleanup: {
+      runFlyCleanup: FunctionReference<
+        "action",
+        "internal",
+        {
+          flyApiToken?: string;
+          machineConcurrency?: number;
+          providerConfig?: {
+            appName: string;
+            image: string;
+            kind: "fly" | "runpod" | "ecs";
+            organizationSlug: string;
+            region: string;
+            volumeName: string;
+            volumePath: string;
+            volumeSizeGb: number;
+          };
+          volumeConcurrency?: number;
+        },
+        {
+          appName: string;
+          errors: Array<string>;
+          machineIdsDeleted: Array<string>;
+          machineIdsRemaining: Array<string>;
+          machinesDeleted: number;
+          machinesFound: number;
+          machinesRemaining: number;
+          volumeIdsDeleted: Array<string>;
+          volumeIdsRemaining: Array<string>;
+          volumesDeleted: number;
+          volumesFound: number;
+          volumesRemaining: number;
+          warnings: Array<string>;
+        },
+        Name
+      >;
+    };
     identity: {
       bindUserAgent: FunctionReference<
         "mutation",
@@ -1631,6 +1668,41 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "internal",
         { consumerUserId: string; nowMs?: number },
         { revoked: number },
+        Name
+      >;
+      runFlyCleanup: FunctionReference<
+        "action",
+        "internal",
+        {
+          flyApiToken?: string;
+          machineConcurrency?: number;
+          providerConfig?: {
+            appName: string;
+            image: string;
+            kind: "fly" | "runpod" | "ecs";
+            organizationSlug: string;
+            region: string;
+            volumeName: string;
+            volumePath: string;
+            volumeSizeGb: number;
+          };
+          volumeConcurrency?: number;
+        },
+        {
+          appName: string;
+          errors: Array<string>;
+          machineIdsDeleted: Array<string>;
+          machineIdsRemaining: Array<string>;
+          machinesDeleted: number;
+          machinesFound: number;
+          machinesRemaining: number;
+          volumeIdsDeleted: Array<string>;
+          volumeIdsRemaining: Array<string>;
+          volumesDeleted: number;
+          volumesFound: number;
+          volumesRemaining: number;
+          warnings: Array<string>;
+        },
         Name
       >;
       secretStatus: FunctionReference<

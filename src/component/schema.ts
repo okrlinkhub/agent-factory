@@ -127,6 +127,7 @@ export default defineSchema({
   workers: defineTable({
     workerId: v.string(),
     provider: v.string(),
+    volumeId: v.optional(v.string()),
     machineRef: v.optional(
       v.object({
         appName: v.string(),

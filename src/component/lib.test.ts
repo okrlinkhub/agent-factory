@@ -833,6 +833,7 @@ describe("component lib", () => {
       machineId,
       appName: TEST_PROVIDER_CONFIG.appName,
       region: TEST_PROVIDER_CONFIG.region,
+      volumeId,
     });
 
     const completionTime = claimTime + 60_000;
@@ -926,9 +927,6 @@ describe("component lib", () => {
       if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/machines`) && method === "GET") {
         return jsonResponse([]);
       }
-      if (url.endsWith(`/machines/machine-orphan-1`) && method === "GET") {
-        return new Response("not found", { status: 404 });
-      }
       if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/volumes`) && method === "GET") {
         return jsonResponse([
           {
@@ -955,6 +953,7 @@ describe("component lib", () => {
       machineId: "machine-orphan-1",
       appName: TEST_PROVIDER_CONFIG.appName,
       region: TEST_PROVIDER_CONFIG.region,
+      volumeId,
     });
 
     const result = await t.action(api.scheduler.checkIdleShutdowns, {
@@ -971,10 +970,193 @@ describe("component lib", () => {
         ((call[1] as RequestInit | undefined)?.method ?? "GET") === "DELETE",
     );
     expect(deleteVolumeCalls).toHaveLength(1);
+    const machineDetailCalls = fetchMock.mock.calls.filter(
+      (call) =>
+        String(call[0]).endsWith(`/machines/machine-orphan-1`) &&
+        ((call[1] as RequestInit | undefined)?.method ?? "GET") === "GET",
+    );
+    expect(machineDetailCalls).toHaveLength(0);
 
     const workers = await t.query((internal.queue as any).listWorkersForScheduler, {});
     const worker = workers.find((row: { workerId: string }) => row.workerId === workerId);
     expect(worker?.status).toBe("stopped");
+  });
+
+  test("reconcile should persist volumeId on the worker row after spawn", async () => {
+    const t = initConvexTest();
+    const nowMs = Date.UTC(2026, 0, 2, 9, 0, 0);
+    const volumeId = "vol-persist-1";
+    const machineId = "machine-persist-1";
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/machines`) && method === "GET") {
+        return jsonResponse(
+          fetchMock.mock.calls.some(
+            (call) =>
+              String(call[0]).endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/machines`) &&
+              ((call[1] as RequestInit | undefined)?.method ?? "GET") === "POST",
+          )
+            ? [
+                {
+                  id: machineId,
+                  name: `afw-${nowMs}-0`,
+                  region: TEST_PROVIDER_CONFIG.region,
+                  state: "started",
+                  config: { image: TEST_PROVIDER_CONFIG.image },
+                },
+              ]
+            : [],
+        );
+      }
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/volumes`) && method === "GET") {
+        return jsonResponse([]);
+      }
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/volumes`) && method === "POST") {
+        return jsonResponse({
+          id: volumeId,
+          name: buildDedicatedVolumeName(TEST_PROVIDER_CONFIG.volumeName, `afw-${nowMs}-0`),
+          region: TEST_PROVIDER_CONFIG.region,
+        });
+      }
+      if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/machines`) && method === "POST") {
+        return jsonResponse({
+          id: machineId,
+          region: TEST_PROVIDER_CONFIG.region,
+          state: "started",
+          config: { image: TEST_PROVIDER_CONFIG.image },
+        });
+      }
+      throw new Error(`Unexpected fetch ${method} ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await t.mutation(api.queue.upsertAgentProfile, {
+      agentKey: "support-agent",
+      version: "1.0.0",
+      secretsRef: [],
+      enabled: true,
+    });
+    await t.mutation(api.queue.importPlaintextSecret, {
+      secretRef: "fly.apiToken",
+      plaintextValue: "fly-token",
+    });
+    await t.mutation(api.queue.importPlaintextSecret, {
+      secretRef: "convex.url",
+      plaintextValue: "https://example.convex.cloud",
+    });
+    await t.mutation(api.queue.enqueueMessage, {
+      conversationId: "telegram:chat:persist-volume",
+      agentKey: "support-agent",
+      payload: {
+        provider: "telegram",
+        providerUserId: "u-persist-volume",
+        messageText: "hello",
+      },
+      nowMs,
+    });
+
+    await t.action(api.scheduler.reconcileWorkerPool, {
+      nowMs,
+      flyApiToken: "fly-token",
+      convexUrl: "https://example.convex.cloud",
+      scalingPolicy: {
+        maxWorkers: 5,
+        queuePerWorkerTarget: 1,
+        spawnStep: 1,
+        idleTimeoutMs: 300_000,
+        reconcileIntervalMs: 15_000,
+      },
+      providerConfig: TEST_PROVIDER_CONFIG,
+    });
+
+    const workers = await t.query((internal.queue as any).listWorkersForScheduler, {});
+    const worker = workers.find((row: { workerId: string }) => row.workerId === `afw-${nowMs}-0`);
+    expect(worker?.machineId).toBe(machineId);
+    expect(worker?.volumeId).toBe(volumeId);
+  });
+
+  test("runFlyCleanup should destroy machines and volumes with final verification", async () => {
+    const t = initConvexTest();
+    await t.mutation(api.queue.importPlaintextSecret, {
+      secretRef: "fly.apiToken",
+      plaintextValue: "fly-token",
+    });
+    await t.mutation(api.queue.setProviderRuntimeConfig, {
+      providerConfig: TEST_PROVIDER_CONFIG,
+    });
+
+    let machineListCalls = 0;
+    let volumeListCalls = 0;
+    const deletedMachines: Array<string> = [];
+    const deletedVolumes: Array<string> = [];
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        const appBase = "https://api.machines.dev/v1/apps/agent-factory-workers-test";
+
+        if (url === `${appBase}` && method === "GET") {
+          return jsonResponse({ name: "agent-factory-workers-test" });
+        }
+        if (url === `${appBase}/machines` && method === "GET") {
+          machineListCalls += 1;
+          return jsonResponse(machineListCalls === 1 ? [{ id: "machine-1" }, { id: "machine-2" }] : []);
+        }
+        if (url === `${appBase}/volumes` && method === "GET") {
+          volumeListCalls += 1;
+          return jsonResponse(
+            volumeListCalls === 1
+              ? [{ id: "volume-1" }, { id: "volume-2" }, { id: "volume-3" }]
+              : [],
+          );
+        }
+        if (url.includes("/machines/") && url.endsWith("/cordon") && method === "POST") {
+          return jsonResponse({});
+        }
+        if (url.includes("/machines/") && url.endsWith("/stop") && method === "POST") {
+          return jsonResponse({});
+        }
+        if (url.includes("/machines/") && method === "DELETE") {
+          const segments = url.split("/");
+          deletedMachines.push(segments[segments.length - 1]!);
+          return new Response(null, { status: 204 });
+        }
+        if (url.includes("/volumes/") && method === "DELETE") {
+          const segments = url.split("/");
+          deletedVolumes.push(segments[segments.length - 1]!);
+          return new Response(null, { status: 204 });
+        }
+        throw new Error(`Unexpected fetch ${method} ${url}`);
+      }),
+    );
+
+    const report = await t.action((api.lib as any).runFlyCleanup, {});
+
+    expect(report.appName).toBe("agent-factory-workers-test");
+    expect(report.machinesFound).toBe(2);
+    expect(report.machinesDeleted).toBe(2);
+    expect(report.machinesRemaining).toBe(0);
+    expect(report.volumesFound).toBe(3);
+    expect(report.volumesDeleted).toBe(3);
+    expect(report.volumesRemaining).toBe(0);
+    expect(report.errors).toEqual([]);
+    expect(report.warnings).toEqual([]);
+    expect(deletedMachines.sort()).toEqual(["machine-1", "machine-2"]);
+    expect(deletedVolumes.sort()).toEqual(["volume-1", "volume-2", "volume-3"]);
+  });
+
+  test("runFlyCleanup should require an active fly secret", async () => {
+    const t = initConvexTest();
+    await t.mutation(api.queue.setProviderRuntimeConfig, {
+      providerConfig: TEST_PROVIDER_CONFIG,
+    });
+
+    await expect(t.action((api.lib as any).runFlyCleanup, {})).rejects.toThrow(
+      "Missing active 'fly.apiToken' secret.",
+    );
   });
 
   test("scheduler count includes queued and in-progress conversations", async () => {
@@ -2555,6 +2737,9 @@ describe("component lib", () => {
       if (url.endsWith(`/apps/${TEST_PROVIDER_CONFIG.appName}/machines`) && method === "POST") {
         throw new Error("simulated spawn failure");
       }
+      if (url.endsWith(`/volumes/vol-spawn-failure-1`) && method === "DELETE") {
+        return emptyResponse();
+      }
       throw new Error(`Unexpected fetch ${method} ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -2604,6 +2789,7 @@ describe("component lib", () => {
     const worker = workers.find((row: { workerId: string }) => row.workerId === `afw-${nowMs}-0`);
     expect(worker?.status).toBe("stopped");
     expect(worker?.machineId).toBeNull();
+    expect(worker?.volumeId).toBeNull();
   });
 
   test("push jobs should dispatch scheduled messages with a stable user-agent conversation id", async () => {
