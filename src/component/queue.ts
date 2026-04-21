@@ -181,6 +181,7 @@ const bridgeRuntimeConfigValidator = v.object({
   appKey: v.union(v.null(), v.string()),
   serviceKey: v.union(v.null(), v.string()),
   serviceKeySecretRef: v.union(v.null(), v.string()),
+  botIdentity: v.union(v.null(), v.string()),
 });
 const workerSpawnOpenClawEnvValidator = v.object({
   OPENCLAW_SERVICE_ID: v.optional(v.string()),
@@ -343,6 +344,7 @@ export const upsertAgentProfile = mutation({
     agentKey: v.string(),
     version: v.string(),
     secretsRef: v.array(v.string()),
+    botIdentity: v.optional(v.string()),
     bridgeConfig: v.optional(bridgeProfileConfigValidator),
     enabled: v.boolean(),
   },
@@ -2731,6 +2733,7 @@ async function resolveBridgeRuntimeConfig(
   ctx: any,
   profile: {
     agentKey: string;
+    botIdentity?: string;
     bridgeConfig?: {
       enabled: boolean;
       baseUrl?: string;
@@ -2747,6 +2750,7 @@ async function resolveBridgeRuntimeConfig(
   appKey: string | null;
   serviceKey: string | null;
   serviceKeySecretRef: string | null;
+  botIdentity: string | null;
 } | null> {
   if (!profile.bridgeConfig?.enabled) {
     return null;
@@ -2791,6 +2795,7 @@ async function resolveBridgeRuntimeConfig(
     appKey: profile.bridgeConfig.appKey ?? appKeyFromSecret,
     serviceKey,
     serviceKeySecretRef,
+    botIdentity: profile.botIdentity ?? null,
   };
 }
 

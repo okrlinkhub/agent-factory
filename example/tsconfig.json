@@ -11,7 +11,17 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "jsx": "react-jsx",
-    "noEmit": true
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@okrlinkhub/agent-factory": ["../src/client/index.ts"],
+      "@okrlinkhub/agent-factory/convex.config.js": [
+        "../src/component/convex.config.ts"
+      ],
+      "@okrlinkhub/agent-factory/convex.config": [
+        "../src/component/convex.config.ts"
+      ]
+    }
   },
   "include": ["./src", "vite.config.ts"]
 }

@@ -20,6 +20,56 @@ app.use(agentFactory);
 export default app;
 ```
 
+## Upgrade to 3.1.0
+
+Version `3.1.0` introduces a **Telegram bot identity routing change**.
+
+What changed:
+
+- Telegram integrations now derive a stable `botIdentity` from `Telegram getMe` using the imported bot token.
+- `agentProfiles`, `pairingCodes`, and `identityBindings` now persist `botIdentity`.
+- Telegram webhook ingress now requires `X-Telegram-Bot-Api-Secret-Token` and resolves agents by `botIdentity + telegramUserId/chatId`.
+- Pairing is now bot-scoped, so a bot token must be imported and verified before creating a new pairing code.
+- Hydrated bridge runtime config now carries the resolved profile `botIdentity` alongside the effective bridge secret ref.
+
+Why this matters:
+
+- This release fixes cross-bot collisions where different users chatting with different bots could still be resolved through only `telegramUserId` / `telegramChatId`.
+- The supported model is `1 user -> 1 bot`, with the receiving bot acting as the first discriminator of the whole Telegram flow.
+
+Important compatibility notes for existing consumer apps:
+
+- If your app already has paired Telegram agents created before `3.1.0`, treat them as legacy rows until they are reconciled or re-paired.
+- If your app wraps `configureTelegramWebhook`, `importTelegramTokenForAgent`, or `getUserAgentOnboardingState`, update local validators/types to include `botIdentity` and `secretTokenConfigured`.
+- If your onboarding UI previously allowed pairing before token verification, it should now require successful token import first.
+- If you have custom Telegram ingress code outside `registerRoutes(...)`, you must validate `X-Telegram-Bot-Api-Secret-Token` and pass `botIdentity` into pairing / resolution flows.
+
+Recommended upgrade checklist:
+
+1. Upgrade the package to `3.1.0`.
+2. Regenerate Convex bindings in the consumer app.
+3. Re-import or reconcile Telegram bot tokens so each `agentProfile` stores the correct `botIdentity`.
+4. Reconfigure Telegram webhooks so the component can set the new `secret_token`.
+5. Run the soft-reset migration for legacy Telegram bindings without `botIdentity`.
+6. Create a fresh pairing for existing bots unless you have a verified reconciliation path in place.
+7. Smoke-test two different bots end-to-end and confirm each webhook resolves and bridges through the correct `agentKey`.
+
+Recommended rollout for apps that already have this component installed:
+
+1. Deploy the updated consumer app code first so it understands the new return shapes and onboarding readiness rules.
+2. Upgrade to `@okrlinkhub/agent-factory@3.1.0`.
+3. Regenerate codegen / bindings.
+4. For every existing bot token, run the token reconciliation or re-import flow, then call webhook configuration again.
+5. Run `softResetTelegramBindingsMissingBotIdentity` during the rollout window so legacy bot-agnostic bindings are marked and optionally revoked in a controlled way.
+6. Re-pair existing bots that were active before this release.
+
+New / updated component surfaces involved in this rollout:
+
+- `importTelegramTokenForAgent`: now derives `botIdentity` from `Telegram getMe` and persists it before continuing.
+- `configureTelegramWebhook`: now configures Telegram `secret_token` using the derived `botIdentity`.
+- `reconcileTelegramBotIdentityForAgent`: verifies a stored token again and re-syncs `botIdentity` on the profile.
+- `softResetTelegramBindingsMissingBotIdentity`: explicit migration helper for legacy Telegram bindings and pending pairings.
+
 ## Upgrade to 1.0.0
 
 Version `1.0.0` introduces a **worker lifecycle breaking change**.

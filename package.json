@@ -9,7 +9,7 @@
   "bugs": {
     "url": "https://github.com/okrlinkhub/agent-factory/issues"
   },
-  "version": "3.0.3",
+  "version": "3.1.2",
   "license": "Apache-2.0",
   "keywords": [
     "convex",
@@ -46,10 +46,12 @@
     "./package.json": "./package.json",
     ".": {
       "types": "./dist/client/index.d.ts",
+      "import": "./dist/client/index.js",
       "default": "./dist/client/index.js"
     },
     "./react": {
       "types": "./dist/react/index.d.ts",
+      "import": "./dist/react/index.js",
       "default": "./dist/react/index.js"
     },
     "./test": "./src/test.ts",
@@ -61,10 +63,12 @@
     },
     "./convex.config.js": {
       "types": "./dist/component/convex.config.d.ts",
+      "import": "./dist/component/convex.config.js",
       "default": "./dist/component/convex.config.js"
     },
     "./convex.config": {
       "types": "./dist/component/convex.config.d.ts",
+      "import": "./dist/component/convex.config.js",
       "default": "./dist/component/convex.config.js"
     }
   },

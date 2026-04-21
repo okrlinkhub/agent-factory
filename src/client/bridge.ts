@@ -5,6 +5,7 @@ export type HydratedBridgeRuntimeConfig = {
   appKey: string | null;
   serviceKey: string | null;
   serviceKeySecretRef: string | null;
+  botIdentity?: string | null;
 };
 
 export type ResolvedBridgeRuntimeConfig = {

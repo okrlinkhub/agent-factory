@@ -53,12 +53,14 @@ export {
   createUserAgentPairing,
   getUserAgentPairingStatus,
   importTelegramTokenForAgent,
+  reconcileTelegramBotIdentityForAgent,
   getUserAgentOnboardingState,
   getRequiredSecretRefs,
   getProviderOperationalReadiness,
   getTelegramAgentReadiness,
   getAgentOperationalReadiness,
   getWebhookReadiness,
+  softResetTelegramBindingsMissingBotIdentity,
 } from "./identity.js";
 
 export {

@@ -66,6 +66,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "internal",
         {
           agentKey: string;
+          botIdentity?: string;
           consumerUserId: string;
           metadata?: Record<string, string>;
           nowMs?: number;
@@ -75,6 +76,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         },
         {
           agentKey: string;
+          botIdentity: null | string;
           boundAt: number;
           consumerUserId: string;
           conversationId: string;
@@ -90,8 +92,9 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       configureTelegramWebhook: FunctionReference<
         "action",
         "internal",
-        { convexSiteUrl: string; secretRef?: string },
+        { agentKey?: string; convexSiteUrl: string; secretRef?: string },
         {
+          botIdentity: null | string;
           currentUrl: null | string;
           description: string;
           isReady: boolean;
@@ -99,6 +102,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           lastErrorMessage: null | string;
           ok: boolean;
           pendingUpdateCount: number;
+          secretTokenConfigured: boolean;
           webhookUrl: string;
         },
         Name
@@ -107,6 +111,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "mutation",
         "internal",
         {
+          botIdentity?: string;
           code: string;
           nowMs?: number;
           telegramChatId: string;
@@ -114,6 +119,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         },
         {
           agentKey: string;
+          botIdentity: null | string;
           code: string;
           consumerUserId: string;
           createdAt: number;
@@ -136,6 +142,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         },
         {
           agentKey: string;
+          botIdentity: null | string;
           code: string;
           consumerUserId: string;
           createdAt: number;
@@ -160,6 +167,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           deepLink: null | string;
           pairing: {
             agentKey: string;
+            botIdentity: null | string;
             code: string;
             consumerUserId: string;
             createdAt: number;
@@ -213,6 +221,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         { code: string; nowMs?: number },
         null | {
           agentKey: string;
+          botIdentity: null | string;
           code: string;
           consumerUserId: string;
           createdAt: number;
@@ -283,6 +292,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         { consumerUserId: string },
         null | {
           agentKey: string;
+          botIdentity: null | string;
           boundAt: number;
           consumerUserId: string;
           conversationId: string;
@@ -301,6 +311,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         { agentKey: string; consumerUserId: string; nowMs?: number },
         {
           agentKey: string;
+          botIdentity: null | string;
           nextAction:
             | "import_token"
             | "configure_webhook"
@@ -323,6 +334,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         { agentKey: string; consumerUserId: string; nowMs?: number },
         null | {
           agentKey: string;
+          botIdentity: null | string;
           code: string;
           consumerUserId: string;
           createdAt: number;
@@ -375,7 +387,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         Name
       >;
       importTelegramTokenForAgent: FunctionReference<
-        "mutation",
+        "action",
         "internal",
         {
           agentKey: string;
@@ -383,7 +395,13 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           metadata?: Record<string, string>;
           plaintextValue: string;
         },
-        { secretId: string; secretRef: string; version: number },
+        {
+          botIdentity: string;
+          secretId: string;
+          secretRef: string;
+          telegramUsername: null | string;
+          version: number;
+        },
         Name
       >;
       listUserAgents: FunctionReference<
@@ -407,10 +425,26 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         }>,
         Name
       >;
+      reconcileTelegramBotIdentityForAgent: FunctionReference<
+        "action",
+        "internal",
+        { agentKey: string; secretRef?: string },
+        {
+          agentKey: string;
+          botIdentity: string;
+          secretRef: null | string;
+          telegramUsername: null | string;
+        },
+        Name
+      >;
       resolveAgentForTelegram: FunctionReference<
         "query",
         "internal",
-        { telegramChatId?: string; telegramUserId?: string },
+        {
+          botIdentity?: string;
+          telegramChatId?: string;
+          telegramUserId?: string;
+        },
         {
           agentKey: null | string;
           consumerUserId: null | string;
@@ -430,6 +464,24 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "internal",
         { consumerUserId: string; nowMs?: number },
         { revoked: number },
+        Name
+      >;
+      softResetTelegramBindingsMissingBotIdentity: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          expirePendingPairings?: boolean;
+          nowMs?: number;
+          revokeActiveBindings?: boolean;
+        },
+        {
+          annotatedBindings: number;
+          expiredPairings: number;
+          legacyBindingsMissingBotIdentity: number;
+          pendingPairingsMissingBotIdentity: number;
+          profilesMissingBotIdentity: number;
+          revokedBindings: number;
+        },
         Name
       >;
     };
@@ -462,6 +514,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "internal",
         {
           agentKey: string;
+          botIdentity?: string;
           consumerUserId: string;
           metadata?: Record<string, string>;
           nowMs?: number;
@@ -471,6 +524,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         },
         {
           agentKey: string;
+          botIdentity: null | string;
           boundAt: number;
           consumerUserId: string;
           conversationId: string;
@@ -567,6 +621,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "internal",
         {
           agentKey: string;
+          botIdentity?: string;
           bridgeConfig?: {
             appBaseUrlMapJsonSecretRef?: string;
             appKey?: string;
@@ -585,8 +640,9 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       configureTelegramWebhook: FunctionReference<
         "action",
         "internal",
-        { convexSiteUrl: string; secretRef?: string },
+        { agentKey?: string; convexSiteUrl: string; secretRef?: string },
         {
+          botIdentity: null | string;
           currentUrl: null | string;
           description: string;
           isReady: boolean;
@@ -594,6 +650,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           lastErrorMessage: null | string;
           ok: boolean;
           pendingUpdateCount: number;
+          secretTokenConfigured: boolean;
           webhookUrl: string;
         },
         Name
@@ -602,6 +659,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "mutation",
         "internal",
         {
+          botIdentity?: string;
           code: string;
           nowMs?: number;
           telegramChatId: string;
@@ -609,6 +667,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         },
         {
           agentKey: string;
+          botIdentity: null | string;
           code: string;
           consumerUserId: string;
           createdAt: number;
@@ -645,6 +704,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         },
         {
           agentKey: string;
+          botIdentity: null | string;
           code: string;
           consumerUserId: string;
           createdAt: number;
@@ -772,6 +832,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           deepLink: null | string;
           pairing: {
             agentKey: string;
+            botIdentity: null | string;
             code: string;
             consumerUserId: string;
             createdAt: number;
@@ -1008,6 +1069,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             appBaseUrlMapJson: null | string;
             appKey: null | string;
             baseUrl: null | string;
+            botIdentity: null | string;
             serviceId: null | string;
             serviceKey: null | string;
             serviceKeySecretRef: null | string;
@@ -1070,6 +1132,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         { code: string; nowMs?: number },
         null | {
           agentKey: string;
+          botIdentity: null | string;
           code: string;
           consumerUserId: string;
           createdAt: number;
@@ -1147,6 +1210,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         { consumerUserId: string },
         null | {
           agentKey: string;
+          botIdentity: null | string;
           boundAt: number;
           consumerUserId: string;
           conversationId: string;
@@ -1176,6 +1240,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         { agentKey: string; consumerUserId: string; nowMs?: number },
         {
           agentKey: string;
+          botIdentity: null | string;
           nextAction:
             | "import_token"
             | "configure_webhook"
@@ -1198,6 +1263,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         { agentKey: string; consumerUserId: string; nowMs?: number },
         null | {
           agentKey: string;
+          botIdentity: null | string;
           code: string;
           consumerUserId: string;
           createdAt: number;
@@ -1300,7 +1366,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         Name
       >;
       importTelegramTokenForAgent: FunctionReference<
-        "mutation",
+        "action",
         "internal",
         {
           agentKey: string;
@@ -1308,7 +1374,13 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           metadata?: Record<string, string>;
           plaintextValue: string;
         },
-        { secretId: string; secretRef: string; version: number },
+        {
+          botIdentity: string;
+          secretId: string;
+          secretRef: string;
+          telegramUsername: null | string;
+          version: number;
+        },
         Name
       >;
       listMessageTemplatesByCompany: FunctionReference<
@@ -1609,6 +1681,18 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         { deadLetter: number; processing: number; queuedReady: number },
         Name
       >;
+      reconcileTelegramBotIdentityForAgent: FunctionReference<
+        "action",
+        "internal",
+        { agentKey: string; secretRef?: string },
+        {
+          agentKey: string;
+          botIdentity: string;
+          secretRef: null | string;
+          telegramUsername: null | string;
+        },
+        Name
+      >;
       reconcileWorkers: FunctionReference<
         "action",
         "internal",
@@ -1648,7 +1732,11 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       resolveAgentForTelegram: FunctionReference<
         "query",
         "internal",
-        { telegramChatId?: string; telegramUserId?: string },
+        {
+          botIdentity?: string;
+          telegramChatId?: string;
+          telegramUserId?: string;
+        },
         {
           agentKey: null | string;
           consumerUserId: null | string;
@@ -1827,6 +1915,24 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "internal",
         { enabled: boolean; jobId: string; nowMs?: number },
         boolean,
+        Name
+      >;
+      softResetTelegramBindingsMissingBotIdentity: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          expirePendingPairings?: boolean;
+          nowMs?: number;
+          revokeActiveBindings?: boolean;
+        },
+        {
+          annotatedBindings: number;
+          expiredPairings: number;
+          legacyBindingsMissingBotIdentity: number;
+          pendingPairingsMissingBotIdentity: number;
+          profilesMissingBotIdentity: number;
+          revokedBindings: number;
+        },
         Name
       >;
       triggerPushJobNow: FunctionReference<
@@ -2738,6 +2844,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             appBaseUrlMapJson: null | string;
             appKey: null | string;
             baseUrl: null | string;
+            botIdentity: null | string;
             serviceId: null | string;
             serviceKey: null | string;
             serviceKeySecretRef: null | string;
@@ -3251,6 +3358,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "internal",
         {
           agentKey: string;
+          botIdentity?: string;
           bridgeConfig?: {
             appBaseUrlMapJsonSecretRef?: string;
             appKey?: string;

@@ -487,18 +487,21 @@ describe("component lib", () => {
       agentKey: "agent-a",
       version: "1.0.0",
       secretsRef: [],
+      botIdentity: "bot-agent-a",
       enabled: true,
     });
     await t.mutation(api.queue.upsertAgentProfile, {
       agentKey: "agent-b",
       version: "1.0.0",
       secretsRef: [],
+      botIdentity: "bot-agent-b",
       enabled: true,
     });
 
     const first = await t.mutation(api.lib.bindUserAgent, {
       consumerUserId: "u-1",
       agentKey: "agent-a",
+      botIdentity: "bot-agent-a",
       source: "telegram_pairing",
       telegramUserId: "tg-user-1",
       telegramChatId: "tg-chat-1",
@@ -711,6 +714,7 @@ describe("component lib", () => {
       appKey: "crm",
       serviceKey: "abs_live_bridge_key",
       serviceKeySecretRef: "agent-bridge.serviceKey.bridge-agent",
+      botIdentity: null,
     });
   });
 
@@ -2850,11 +2854,13 @@ describe("component lib", () => {
       agentKey: "push-telegram-manual-agent",
       version: "1.0.0",
       secretsRef: [],
+      botIdentity: "push-telegram-manual-bot",
       enabled: true,
     });
     await t.mutation(api.lib.bindUserAgent, {
       consumerUserId: "user-push-telegram-manual",
       agentKey: "push-telegram-manual-agent",
+      botIdentity: "push-telegram-manual-bot",
       source: "telegram_pairing",
       telegramUserId: "tg-user-manual-1",
       telegramChatId: "8246761447",
@@ -2895,11 +2901,13 @@ describe("component lib", () => {
       agentKey: "push-telegram-scheduled-agent",
       version: "1.0.0",
       secretsRef: [],
+      botIdentity: "push-telegram-scheduled-bot",
       enabled: true,
     });
     await t.mutation(api.lib.bindUserAgent, {
       consumerUserId: "user-push-telegram-scheduled",
       agentKey: "push-telegram-scheduled-agent",
+      botIdentity: "push-telegram-scheduled-bot",
       source: "telegram_pairing",
       telegramUserId: "tg-user-scheduled-1",
       telegramChatId: "9988776655",

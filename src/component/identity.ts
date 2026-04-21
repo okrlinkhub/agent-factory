@@ -1,7 +1,8 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api.js";
-import { action, mutation, query } from "./_generated/server.js";
+import { action, internalMutation, mutation, query } from "./_generated/server.js";
 import type { MutationCtx, QueryCtx } from "./_generated/server.js";
+import type { Id } from "./_generated/dataModel.js";
 
 const bindingStatusValidator = v.union(v.literal("active"), v.literal("revoked"));
 const bindingSourceValidator = v.union(
@@ -26,6 +27,7 @@ const bindingViewValidator = v.object({
   consumerUserId: v.string(),
   agentKey: v.string(),
   conversationId: v.string(),
+  botIdentity: v.union(v.null(), v.string()),
   status: bindingStatusValidator,
   source: bindingSourceValidator,
   telegramUserId: v.union(v.null(), v.string()),
@@ -39,6 +41,7 @@ const pairingCodeViewValidator = v.object({
   code: v.string(),
   consumerUserId: v.string(),
   agentKey: v.string(),
+  botIdentity: v.union(v.null(), v.string()),
   status: pairingStatusValidator,
   createdAt: v.number(),
   expiresAt: v.number(),
@@ -51,6 +54,8 @@ const telegramWebhookStatusValidator = v.object({
   ok: v.boolean(),
   webhookUrl: v.string(),
   currentUrl: v.union(v.null(), v.string()),
+  botIdentity: v.union(v.null(), v.string()),
+  secretTokenConfigured: v.boolean(),
   isReady: v.boolean(),
   pendingUpdateCount: v.number(),
   lastErrorMessage: v.union(v.null(), v.string()),
@@ -93,6 +98,7 @@ const webhookReadinessValidator = v.object({
 const onboardingStateValidator = v.object({
   agentKey: v.string(),
   telegramUsername: v.union(v.null(), v.string()),
+  botIdentity: v.union(v.null(), v.string()),
   tokenSecretRef: v.union(v.null(), v.string()),
   tokenImported: v.boolean(),
   webhookReady: v.boolean(),
@@ -149,6 +155,7 @@ type OnboardingNextAction =
 type OnboardingState = {
   agentKey: string;
   telegramUsername: string | null;
+  botIdentity: string | null;
   tokenSecretRef: string | null;
   tokenImported: boolean;
   webhookReady: boolean;
@@ -161,6 +168,7 @@ type OnboardingState = {
 type UpsertBindingArgs = {
   consumerUserId: string;
   agentKey: string;
+  botIdentity?: string;
   source?: BindingSource;
   telegramUserId?: string;
   telegramChatId?: string;
@@ -168,10 +176,14 @@ type UpsertBindingArgs = {
   nowMs?: number;
 };
 
+const TELEGRAM_WEBHOOK_SECRET_TOKEN_PREFIX = "af_v1_";
+const LEGACY_TELEGRAM_WEBHOOK_SECRET_TOKEN_PREFIX = "af:v1:";
+
 export const configureTelegramWebhook = action({
   args: {
     convexSiteUrl: v.string(),
     secretRef: v.optional(v.string()),
+    agentKey: v.optional(v.string()),
   },
   returns: telegramWebhookStatusValidator,
   handler: async (ctx, args) => {
@@ -199,6 +211,16 @@ export const configureTelegramWebhook = action({
 
     const webhookUrl = `${normalizedSiteUrl}/agent-factory/telegram/webhook`;
     const telegramApiBaseUrl = `https://api.telegram.org/bot${encodeURIComponent(token)}`;
+    const telegramBot = await fetchTelegramBotProfile(token);
+    const webhookSecretToken = buildTelegramWebhookSecretToken(telegramBot.botIdentity);
+    const agentKey = args.agentKey?.trim();
+    if (agentKey) {
+      await ctx.runMutation(internal.identity.syncAgentProfileTelegramBotIdentity, {
+        agentKey,
+        botIdentity: telegramBot.botIdentity,
+        telegramUsername: telegramBot.telegramUsername ?? undefined,
+      });
+    }
 
     const setWebhookResponse = await fetch(`${telegramApiBaseUrl}/setWebhook`, {
       method: "POST",
@@ -207,6 +229,7 @@ export const configureTelegramWebhook = action({
       },
       body: JSON.stringify({
         url: webhookUrl,
+        secret_token: webhookSecretToken,
       }),
     });
 
@@ -259,6 +282,8 @@ export const configureTelegramWebhook = action({
       ok: true,
       webhookUrl,
       currentUrl,
+      botIdentity: telegramBot.botIdentity,
+      secretTokenConfigured: true,
       isReady,
       pendingUpdateCount,
       lastErrorMessage,
@@ -284,6 +309,7 @@ export const createPairingCode = mutation({
 export const consumePairingCode = mutation({
   args: {
     code: v.string(),
+    botIdentity: v.optional(v.string()),
     telegramUserId: v.string(),
     telegramChatId: v.string(),
     nowMs: v.optional(v.number()),
@@ -305,10 +331,18 @@ export const consumePairingCode = mutation({
       await ctx.db.patch(pairing._id, { status: "expired" });
       throw new Error("Pairing code expired");
     }
+    const providedBotIdentity = args.botIdentity?.trim() || null;
+    if (!providedBotIdentity) {
+      throw new Error("Missing bot identity for Telegram pairing");
+    }
+    if (pairing.botIdentity && pairing.botIdentity !== providedBotIdentity) {
+      throw new Error("Pairing code belongs to a different Telegram bot");
+    }
 
     await upsertBinding(ctx, {
       consumerUserId: pairing.consumerUserId,
       agentKey: pairing.agentKey,
+      botIdentity: providedBotIdentity,
       source: "telegram_pairing",
       telegramUserId: args.telegramUserId,
       telegramChatId: args.telegramChatId,
@@ -318,6 +352,7 @@ export const consumePairingCode = mutation({
     await ctx.db.patch(pairing._id, {
       status: "used",
       usedAt: nowMs,
+      botIdentity: providedBotIdentity,
       telegramUserId: args.telegramUserId,
       telegramChatId: args.telegramChatId,
     });
@@ -326,6 +361,7 @@ export const consumePairingCode = mutation({
       code: pairing.code,
       consumerUserId: pairing.consumerUserId,
       agentKey: pairing.agentKey,
+      botIdentity: providedBotIdentity,
       status: "used" as const,
       createdAt: pairing.createdAt,
       expiresAt: pairing.expiresAt,
@@ -355,6 +391,7 @@ export const getPairingCodeStatus = query({
         code: pairing.code,
         consumerUserId: pairing.consumerUserId,
         agentKey: pairing.agentKey,
+        botIdentity: pairing.botIdentity ?? null,
         status: "expired" as const,
         createdAt: pairing.createdAt,
         expiresAt: pairing.expiresAt,
@@ -368,6 +405,7 @@ export const getPairingCodeStatus = query({
       code: pairing.code,
       consumerUserId: pairing.consumerUserId,
       agentKey: pairing.agentKey,
+      botIdentity: pairing.botIdentity ?? null,
       status: pairing.status,
       createdAt: pairing.createdAt,
       expiresAt: pairing.expiresAt,
@@ -382,6 +420,7 @@ export const bindUserAgent = mutation({
   args: {
     consumerUserId: v.string(),
     agentKey: v.string(),
+    botIdentity: v.optional(v.string()),
     source: v.optional(bindingSourceValidator),
     telegramUserId: v.optional(v.string()),
     telegramChatId: v.optional(v.string()),
@@ -442,6 +481,7 @@ export const resolveAgentForUser = query({
 
 export const resolveAgentForTelegram = query({
   args: {
+    botIdentity: v.optional(v.string()),
     telegramUserId: v.optional(v.string()),
     telegramChatId: v.optional(v.string()),
   },
@@ -451,6 +491,7 @@ export const resolveAgentForTelegram = query({
     conversationId: v.union(v.null(), v.string()),
   }),
   handler: async (ctx, args) => {
+    const botIdentity = args.botIdentity?.trim() || null;
     let active:
       | {
           consumerUserId: string;
@@ -459,7 +500,45 @@ export const resolveAgentForTelegram = query({
         }
       | null = null;
 
-    if (args.telegramUserId) {
+    if (botIdentity && args.telegramUserId) {
+      const byUser = await ctx.db
+        .query("identityBindings")
+        .withIndex("by_botIdentity_and_telegramUserId_and_status", (q) =>
+          q
+            .eq("botIdentity", botIdentity)
+            .eq("telegramUserId", args.telegramUserId)
+            .eq("status", "active"),
+        )
+        .first();
+      if (byUser) {
+        active = {
+          consumerUserId: byUser.consumerUserId,
+          agentKey: byUser.agentKey,
+          conversationId: byUser.conversationId,
+        };
+      }
+    }
+
+    if (!active && botIdentity && args.telegramChatId) {
+      const byChat = await ctx.db
+        .query("identityBindings")
+        .withIndex("by_botIdentity_and_telegramChatId_and_status", (q) =>
+          q
+            .eq("botIdentity", botIdentity)
+            .eq("telegramChatId", args.telegramChatId)
+            .eq("status", "active"),
+        )
+        .first();
+      if (byChat) {
+        active = {
+          consumerUserId: byChat.consumerUserId,
+          agentKey: byChat.agentKey,
+          conversationId: byChat.conversationId,
+        };
+      }
+    }
+
+    if (!active && !botIdentity && args.telegramUserId) {
       const byUser = await ctx.db
         .query("identityBindings")
         .withIndex("by_telegramUserId_and_status", (q) =>
@@ -475,7 +554,7 @@ export const resolveAgentForTelegram = query({
       }
     }
 
-    if (!active && args.telegramChatId) {
+    if (!active && !botIdentity && args.telegramChatId) {
       const byChat = await ctx.db
         .query("identityBindings")
         .withIndex("by_telegramChatId_and_status", (q) =>
@@ -518,6 +597,7 @@ export const getUserAgentBinding = query({
       consumerUserId: active.consumerUserId,
       agentKey: active.agentKey,
       conversationId: active.conversationId,
+      botIdentity: active.botIdentity ?? null,
       status: active.status,
       source: active.source,
       telegramUserId: active.telegramUserId ?? null,
@@ -644,6 +724,7 @@ export const getUserAgentPairingStatus = query({
         code: pairing.code,
         consumerUserId: pairing.consumerUserId,
         agentKey: pairing.agentKey,
+        botIdentity: pairing.botIdentity ?? null,
         status:
           pairing.status === "pending" && pairing.expiresAt <= nowMs
             ? "expired"
@@ -659,7 +740,7 @@ export const getUserAgentPairingStatus = query({
   },
 });
 
-export const importTelegramTokenForAgent = mutation({
+export const importTelegramTokenForAgent = action({
   args: {
     consumerUserId: v.string(),
     agentKey: v.string(),
@@ -670,34 +751,31 @@ export const importTelegramTokenForAgent = mutation({
     secretId: v.id("secrets"),
     secretRef: v.string(),
     version: v.number(),
+    botIdentity: v.string(),
+    telegramUsername: v.union(v.null(), v.string()),
   }),
-  handler: async (ctx, args) => {
-    const details = await buildUserAgentDetails(
-      ctx,
-      args.consumerUserId,
-      args.agentKey,
-      Date.now(),
-    );
-    if (details.latestBinding === null && details.latestPairing === null) {
-      throw new Error("Agent is not yet associated with the provided consumerUserId");
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{
+    secretId: Id<"secrets">;
+    secretRef: string;
+    version: number;
+    botIdentity: string;
+    telegramUsername: string | null;
+  }> => {
+    const plaintextValue = args.plaintextValue.trim();
+    if (!plaintextValue) {
+      throw new Error("Telegram token is required");
     }
-    const profile = await ctx.db
-      .query("agentProfiles")
-      .withIndex("by_agentKey", (q) => q.eq("agentKey", args.agentKey))
-      .unique();
-    if (!profile) {
-      throw new Error(`Agent profile '${args.agentKey}' not found`);
-    }
-    const secretRef = resolveTelegramSecretRef(profile, args.agentKey);
-    if (!profile.secretsRef.includes(secretRef)) {
-      await ctx.db.patch(profile._id, {
-        secretsRef: [...profile.secretsRef, secretRef],
-      });
-    }
-    return await importPlaintextSecretRecord(ctx, {
-      secretRef,
-      plaintextValue: args.plaintextValue,
+    const telegramBot = await fetchTelegramBotProfile(plaintextValue);
+    return await ctx.runMutation(internal.identity.persistImportedTelegramTokenForAgent, {
+      consumerUserId: args.consumerUserId,
+      agentKey: args.agentKey,
+      plaintextValue,
       metadata: args.metadata,
+      botIdentity: telegramBot.botIdentity,
+      telegramUsername: telegramBot.telegramUsername ?? undefined,
     });
   },
 });
@@ -775,6 +853,7 @@ export const getUserAgentOnboardingState = query({
             : "pending";
     const webhookReady =
       tokenImported &&
+      details.botIdentity !== null &&
       details.latestBinding?.status === "active" &&
       details.latestBinding.source === "telegram_pairing";
     const pairingCode =
@@ -783,6 +862,8 @@ export const getUserAgentOnboardingState = query({
         : null;
     const nextAction: OnboardingNextAction = !tokenImported
       ? "import_token"
+      : details.botIdentity === null
+        ? "import_token"
       : !webhookReady
         ? "configure_webhook"
         : pairingStatus === "pending"
@@ -793,6 +874,7 @@ export const getUserAgentOnboardingState = query({
     const result: OnboardingState = {
       agentKey: args.agentKey,
       telegramUsername: details.telegramUsername,
+      botIdentity: details.botIdentity,
       tokenSecretRef: details.telegramTokenSecretRef,
       tokenImported,
       webhookReady,
@@ -848,6 +930,204 @@ export const getWebhookReadiness = action({
       lastErrorDate: info.lastErrorDate,
       webhookReady:
         info.currentUrl !== null && info.currentUrl.endsWith("/agent-factory/telegram/webhook"),
+    };
+  },
+});
+
+export const syncAgentProfileTelegramBotIdentity = internalMutation({
+  args: {
+    agentKey: v.string(),
+    botIdentity: v.string(),
+    telegramUsername: v.optional(v.string()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const agentKey = args.agentKey.trim();
+    const botIdentity = args.botIdentity.trim();
+    if (!agentKey || !botIdentity) {
+      throw new Error("agentKey and botIdentity are required");
+    }
+    const profile = await ctx.db
+      .query("agentProfiles")
+      .withIndex("by_agentKey", (q) => q.eq("agentKey", agentKey))
+      .unique();
+    if (!profile) {
+      throw new Error(`Agent profile '${agentKey}' not found`);
+    }
+    await ensureUniqueBotIdentityForAgent(ctx, agentKey, botIdentity);
+    await ctx.db.patch(profile._id, {
+      botIdentity,
+    });
+    return null;
+  },
+});
+
+export const persistImportedTelegramTokenForAgent = internalMutation({
+  args: {
+    consumerUserId: v.string(),
+    agentKey: v.string(),
+    plaintextValue: v.string(),
+    metadata: v.optional(v.record(v.string(), v.string())),
+    botIdentity: v.string(),
+    telegramUsername: v.optional(v.string()),
+  },
+  returns: v.object({
+    secretId: v.id("secrets"),
+    secretRef: v.string(),
+    version: v.number(),
+    botIdentity: v.string(),
+    telegramUsername: v.union(v.null(), v.string()),
+  }),
+  handler: async (ctx, args) => {
+    const details = await buildUserAgentDetails(
+      ctx,
+      args.consumerUserId,
+      args.agentKey,
+      Date.now(),
+    );
+    const profile = await ctx.db
+      .query("agentProfiles")
+      .withIndex("by_agentKey", (q) => q.eq("agentKey", args.agentKey))
+      .unique();
+    if (!profile) {
+      throw new Error(`Agent profile '${args.agentKey}' not found`);
+    }
+    const isKnownUserAgent =
+      details.latestBinding !== null ||
+      details.latestPairing !== null ||
+      details.telegramTokenSecretRef === `telegram.botToken.${args.agentKey}`;
+    if (!isKnownUserAgent) {
+      throw new Error("Agent is not yet associated with the provided consumerUserId");
+    }
+    await ensureUniqueBotIdentityForAgent(ctx, args.agentKey, args.botIdentity);
+    const secretRef = resolveTelegramSecretRef(profile, args.agentKey);
+    const nextSecretsRef = profile.secretsRef.includes(secretRef)
+      ? profile.secretsRef
+      : [...profile.secretsRef, secretRef];
+    await ctx.db.patch(profile._id, {
+      secretsRef: nextSecretsRef,
+      botIdentity: args.botIdentity,
+    });
+    const result = await importPlaintextSecretRecord(ctx, {
+      secretRef,
+      plaintextValue: args.plaintextValue,
+      metadata: {
+        ...(args.metadata ?? {}),
+        telegramBotId: args.botIdentity,
+        ...(args.telegramUsername ? { telegramUsername: args.telegramUsername } : {}),
+      },
+    });
+    return {
+      ...result,
+      botIdentity: args.botIdentity,
+      telegramUsername: args.telegramUsername ?? null,
+    };
+  },
+});
+
+export const reconcileTelegramBotIdentityForAgent = action({
+  args: {
+    agentKey: v.string(),
+    secretRef: v.optional(v.string()),
+  },
+  returns: v.object({
+    agentKey: v.string(),
+    secretRef: v.union(v.null(), v.string()),
+    botIdentity: v.string(),
+    telegramUsername: v.union(v.null(), v.string()),
+  }),
+  handler: async (ctx, args) => {
+    const secretRef = args.secretRef?.trim() || `telegram.botToken.${args.agentKey.trim()}`;
+    const token = await ctx.runQuery(internal.queue.getActiveSecretPlaintext, {
+      secretRef,
+    });
+    if (!token) {
+      throw new Error(`Missing Telegram token. Import an active '${secretRef}' secret first.`);
+    }
+    const telegramBot = await fetchTelegramBotProfile(token);
+    await ctx.runMutation(internal.identity.syncAgentProfileTelegramBotIdentity, {
+      agentKey: args.agentKey,
+      botIdentity: telegramBot.botIdentity,
+      telegramUsername: telegramBot.telegramUsername ?? undefined,
+    });
+    return {
+      agentKey: args.agentKey,
+      secretRef,
+      botIdentity: telegramBot.botIdentity,
+      telegramUsername: telegramBot.telegramUsername,
+    };
+  },
+});
+
+export const softResetTelegramBindingsMissingBotIdentity = mutation({
+  args: {
+    nowMs: v.optional(v.number()),
+    revokeActiveBindings: v.optional(v.boolean()),
+    expirePendingPairings: v.optional(v.boolean()),
+  },
+  returns: v.object({
+    revokedBindings: v.number(),
+    annotatedBindings: v.number(),
+    expiredPairings: v.number(),
+    pendingPairingsMissingBotIdentity: v.number(),
+    legacyBindingsMissingBotIdentity: v.number(),
+    profilesMissingBotIdentity: v.number(),
+  }),
+  handler: async (ctx, args) => {
+    const nowMs = args.nowMs ?? Date.now();
+    const revokeActiveBindings = args.revokeActiveBindings ?? true;
+    const expirePendingPairings = args.expirePendingPairings ?? true;
+    const [bindings, pairingCodes, profiles] = await Promise.all([
+      ctx.db.query("identityBindings").collect(),
+      ctx.db.query("pairingCodes").collect(),
+      ctx.db.query("agentProfiles").collect(),
+    ]);
+    let revokedBindings = 0;
+    let annotatedBindings = 0;
+    let expiredPairings = 0;
+    const legacyBindings = bindings.filter(
+      (binding) => binding.source === "telegram_pairing" && !binding.botIdentity,
+    );
+    for (const binding of legacyBindings) {
+      const nextMetadata = {
+        ...(binding.metadata ?? {}),
+        softResetReason: "missing_bot_identity",
+        softResetAt: String(nowMs),
+        softResetMode: "telegram_bot_identity_v1",
+      };
+      if (revokeActiveBindings && binding.status === "active") {
+        await ctx.db.patch(binding._id, {
+          status: "revoked",
+          revokedAt: nowMs,
+          metadata: nextMetadata,
+        });
+        revokedBindings += 1;
+      } else {
+        await ctx.db.patch(binding._id, {
+          metadata: nextMetadata,
+        });
+        annotatedBindings += 1;
+      }
+    }
+    const pendingPairingsMissingBotIdentity = pairingCodes.filter(
+      (pairing) => pairing.status === "pending" && !pairing.botIdentity,
+    );
+    for (const pairing of pendingPairingsMissingBotIdentity) {
+      if (expirePendingPairings) {
+        await ctx.db.patch(pairing._id, {
+          status: "expired",
+        });
+        expiredPairings += 1;
+      }
+    }
+    const profilesMissingBotIdentity = profiles.filter((profile) => !profile.botIdentity).length;
+    return {
+      revokedBindings,
+      annotatedBindings,
+      expiredPairings,
+      pendingPairingsMissingBotIdentity: pendingPairingsMissingBotIdentity.length,
+      legacyBindingsMissingBotIdentity: legacyBindings.length,
+      profilesMissingBotIdentity,
     };
   },
 });
@@ -1007,6 +1287,12 @@ async function buildUserAgentDetails(
     pairings.find((pairing) => pairing.status === "pending") ?? null;
   const telegramTokenSecretRef = resolveTelegramSecretRef(profile, agentKey);
   const telegramUsername = deriveTelegramUsername(latestBinding, telegramTokenSecretRef);
+  const botIdentity =
+    profile?.botIdentity?.trim() ||
+    latestBinding?.botIdentity?.trim() ||
+    latestPairing?.botIdentity?.trim() ||
+    latestPendingPairing?.botIdentity?.trim() ||
+    null;
   const displayName = deriveDisplayName(latestBinding);
   const status = deriveUserAgentStatus({
     latestBinding,
@@ -1018,6 +1304,7 @@ async function buildUserAgentDetails(
     latestBinding,
     latestPairing,
     latestPendingPairing,
+    botIdentity,
     telegramTokenSecretRef,
     telegramUsername,
     displayName,
@@ -1117,6 +1404,75 @@ async function fetchTelegramWebhookInfo(token: string) {
   };
 }
 
+async function fetchTelegramBotProfile(token: string) {
+  const telegramApiBaseUrl = `https://api.telegram.org/bot${encodeURIComponent(token)}`;
+  const response = await fetch(`${telegramApiBaseUrl}/getMe`);
+  const payload = (await response.json().catch(() => ({}))) as {
+    ok?: boolean;
+    description?: string;
+    result?: {
+      id?: number | string;
+      username?: string;
+    };
+  };
+  if (!response.ok || payload.ok !== true) {
+    throw new Error(
+      `Telegram getMe failed: ${
+        typeof payload.description === "string" ? payload.description : "unknown error"
+      }`,
+    );
+  }
+  const rawBotIdentity = payload.result?.id;
+  const botIdentity =
+    rawBotIdentity === undefined || rawBotIdentity === null ? "" : String(rawBotIdentity).trim();
+  if (!botIdentity) {
+    throw new Error("Telegram getMe did not return a bot id");
+  }
+  const telegramUsername =
+    typeof payload.result?.username === "string" && payload.result.username.trim().length > 0
+      ? payload.result.username.trim()
+      : null;
+  return {
+    botIdentity,
+    telegramUsername,
+  };
+}
+
+function buildTelegramWebhookSecretToken(botIdentity: string) {
+  return `${TELEGRAM_WEBHOOK_SECRET_TOKEN_PREFIX}${botIdentity}`;
+}
+
+export function parseTelegramWebhookSecretToken(secretToken: string | null | undefined) {
+  const value = secretToken?.trim() ?? "";
+  const prefix = value.startsWith(TELEGRAM_WEBHOOK_SECRET_TOKEN_PREFIX)
+    ? TELEGRAM_WEBHOOK_SECRET_TOKEN_PREFIX
+    : value.startsWith(LEGACY_TELEGRAM_WEBHOOK_SECRET_TOKEN_PREFIX)
+      ? LEGACY_TELEGRAM_WEBHOOK_SECRET_TOKEN_PREFIX
+      : null;
+  if (!prefix) {
+    return null;
+  }
+  const botIdentity = value.slice(prefix.length).trim();
+  return botIdentity.length > 0 ? botIdentity : null;
+}
+
+async function ensureUniqueBotIdentityForAgent(
+  ctx: QueryCtx | MutationCtx,
+  agentKey: string,
+  botIdentity: string,
+) {
+  const collisions = await ctx.db
+    .query("agentProfiles")
+    .withIndex("by_botIdentity", (q) => q.eq("botIdentity", botIdentity))
+    .collect();
+  const conflictingProfile = collisions.find((profile) => profile.agentKey !== agentKey) ?? null;
+  if (conflictingProfile) {
+    throw new Error(
+      `Telegram bot identity '${botIdentity}' is already assigned to agent '${conflictingProfile.agentKey}'`,
+    );
+  }
+}
+
 function encryptSecretValue(plaintext: string): string {
   const units = Array.from(plaintext);
   return units
@@ -1147,6 +1503,12 @@ async function createPairingCodeRecord(
     .unique();
   if (!profile || !profile.enabled) {
     throw new Error(`Agent profile '${args.agentKey}' not found or disabled`);
+  }
+  const botIdentity = profile.botIdentity?.trim() || null;
+  if (!botIdentity) {
+    throw new Error(
+      `Agent '${args.agentKey}' is missing botIdentity. Import and verify the Telegram token first.`,
+    );
   }
 
   const pendingCodes = await ctx.db
@@ -1183,6 +1545,7 @@ async function createPairingCodeRecord(
     code,
     consumerUserId: args.consumerUserId,
     agentKey: args.agentKey,
+    botIdentity,
     status: "pending",
     createdAt: nowMs,
     expiresAt,
@@ -1192,6 +1555,7 @@ async function createPairingCodeRecord(
     code,
     consumerUserId: args.consumerUserId,
     agentKey: args.agentKey,
+    botIdentity,
     status: "pending" as const,
     createdAt: nowMs,
     expiresAt,
@@ -1311,11 +1675,15 @@ async function buildTelegramAgentReadiness(
       : false;
   const webhookReady =
     hasTelegramToken &&
+    details.botIdentity !== null &&
     details.latestBinding?.status === "active" &&
     details.latestBinding.source === "telegram_pairing";
   const issues = [...providerReadiness.issues];
   if (!hasTelegramToken) {
     issues.push("missing_telegram_token");
+  }
+  if (!details.botIdentity) {
+    issues.push("missing_bot_identity");
   }
   if (!webhookReady) {
     issues.push("webhook_not_verified");
@@ -1342,6 +1710,10 @@ async function upsertBinding(
   if (!profile) {
     throw new Error(`Agent profile '${args.agentKey}' not found`);
   }
+  const botIdentity = args.botIdentity?.trim() || profile.botIdentity?.trim() || null;
+  if ((args.telegramUserId || args.telegramChatId) && !botIdentity) {
+    throw new Error(`Agent '${args.agentKey}' is missing botIdentity`);
+  }
 
   const activeForUser = await ctx.db
     .query("identityBindings")
@@ -1353,7 +1725,22 @@ async function upsertBinding(
     await ctx.db.patch(row._id, { status: "revoked", revokedAt: nowMs });
   }
 
-  if (args.telegramUserId) {
+  if (args.telegramUserId && botIdentity) {
+    const byTelegramUser = await ctx.db
+      .query("identityBindings")
+      .withIndex("by_botIdentity_and_telegramUserId_and_status", (q) =>
+        q
+          .eq("botIdentity", botIdentity)
+          .eq("telegramUserId", args.telegramUserId)
+          .eq("status", "active"),
+      )
+      .collect();
+    for (const row of byTelegramUser) {
+      if (row.consumerUserId !== args.consumerUserId) {
+        await ctx.db.patch(row._id, { status: "revoked", revokedAt: nowMs });
+      }
+    }
+  } else if (args.telegramUserId) {
     const byTelegramUser = await ctx.db
       .query("identityBindings")
       .withIndex("by_telegramUserId_and_status", (q) =>
@@ -1367,7 +1754,22 @@ async function upsertBinding(
     }
   }
 
-  if (args.telegramChatId) {
+  if (args.telegramChatId && botIdentity) {
+    const byTelegramChat = await ctx.db
+      .query("identityBindings")
+      .withIndex("by_botIdentity_and_telegramChatId_and_status", (q) =>
+        q
+          .eq("botIdentity", botIdentity)
+          .eq("telegramChatId", args.telegramChatId)
+          .eq("status", "active"),
+      )
+      .collect();
+    for (const row of byTelegramChat) {
+      if (row.consumerUserId !== args.consumerUserId) {
+        await ctx.db.patch(row._id, { status: "revoked", revokedAt: nowMs });
+      }
+    }
+  } else if (args.telegramChatId) {
     const byTelegramChat = await ctx.db
       .query("identityBindings")
       .withIndex("by_telegramChatId_and_status", (q) =>
@@ -1385,6 +1787,7 @@ async function upsertBinding(
     consumerUserId: args.consumerUserId,
     agentKey: args.agentKey,
     conversationId: buildUserAgentConversationId(args.consumerUserId, args.agentKey),
+    botIdentity: botIdentity ?? undefined,
     status: "active",
     source: args.source ?? "api",
     telegramUserId: args.telegramUserId,
@@ -1402,6 +1805,7 @@ async function upsertBinding(
     consumerUserId: created.consumerUserId,
     agentKey: created.agentKey,
     conversationId: created.conversationId,
+    botIdentity: created.botIdentity ?? null,
     status: created.status,
     source: created.source,
     telegramUserId: created.telegramUserId ?? null,

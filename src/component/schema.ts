@@ -7,6 +7,7 @@ export default defineSchema({
     agentKey: v.string(),
     version: v.string(),
     secretsRef: v.array(v.string()),
+    botIdentity: v.optional(v.string()),
     bridgeConfig: v.optional(
       v.object({
         enabled: v.boolean(),
@@ -20,6 +21,7 @@ export default defineSchema({
     enabled: v.boolean(),
   })
     .index("by_agentKey", ["agentKey"])
+    .index("by_botIdentity", ["botIdentity"])
     .index("by_enabled", ["enabled"]),
 
   conversations: defineTable({
@@ -256,6 +258,7 @@ export default defineSchema({
     consumerUserId: v.string(),
     agentKey: v.string(),
     conversationId: v.string(),
+    botIdentity: v.optional(v.string()),
     status: v.union(v.literal("active"), v.literal("revoked")),
     source: v.union(
       v.literal("manual"),
@@ -274,6 +277,16 @@ export default defineSchema({
       "agentKey",
       "boundAt",
     ])
+    .index("by_botIdentity_and_telegramUserId_and_status", [
+      "botIdentity",
+      "telegramUserId",
+      "status",
+    ])
+    .index("by_botIdentity_and_telegramChatId_and_status", [
+      "botIdentity",
+      "telegramChatId",
+      "status",
+    ])
     .index("by_telegramUserId_and_status", ["telegramUserId", "status"])
     .index("by_telegramChatId_and_status", ["telegramChatId", "status"])
     .index("by_agentKey_and_status", ["agentKey", "status"]),
@@ -282,6 +295,7 @@ export default defineSchema({
     code: v.string(),
     consumerUserId: v.string(),
     agentKey: v.string(),
+    botIdentity: v.optional(v.string()),
     status: v.union(v.literal("pending"), v.literal("used"), v.literal("expired")),
     createdAt: v.number(),
     expiresAt: v.number(),
@@ -296,6 +310,7 @@ export default defineSchema({
       "agentKey",
       "createdAt",
     ])
+    .index("by_botIdentity_and_status", ["botIdentity", "status"])
     .index("by_expiresAt", ["expiresAt"]),
 
   globalSkills: defineTable({

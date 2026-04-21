@@ -82,6 +82,7 @@ describe("example", () => {
     const bound = await t.mutation(api.example.bindUserAgent, {
       consumerUserId: "anonymous",
       agentKey: "default",
+      botIdentity: "telegram-bot-default",
       source: "telegram_pairing",
       telegramUserId: "tg-user-1",
       telegramChatId: "tg-chat-1",
@@ -155,6 +156,7 @@ describe("example", () => {
 
     const consumed = await t.mutation(api.example.consumePairingCode, {
       code: created.code,
+      botIdentity: "telegram-bot-default",
       telegramUserId: "tg-user-77",
       telegramChatId: "tg-chat-77",
     });

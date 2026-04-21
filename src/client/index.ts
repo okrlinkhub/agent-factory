@@ -7,6 +7,7 @@ import {
 import type { Auth, HttpRouter } from "convex/server";
 import { v } from "convex/values";
 import type { ComponentApi } from "../component/_generated/component.js";
+import { parseTelegramWebhookSecretToken } from "../component/identity.js";
 import {
   providerConfigValidator,
   scalingPolicyValidator,
@@ -488,6 +489,7 @@ export function exposeApi(
           agentKey: "default",
           version: "1.0.0",
           secretsRef: ["telegram.botToken"],
+          botIdentity: "telegram-bot-default",
           enabled: true,
         });
       },
@@ -599,6 +601,7 @@ export function exposeApi(
       args: {
         consumerUserId: v.string(),
         agentKey: v.string(),
+        botIdentity: v.optional(v.string()),
         source: v.optional(
           v.union(v.literal("manual"), v.literal("telegram_pairing"), v.literal("api")),
         ),
@@ -681,6 +684,7 @@ export function exposeApi(
     }),
     resolveAgentForTelegram: queryGeneric({
       args: {
+        botIdentity: v.optional(v.string()),
         telegramUserId: v.optional(v.string()),
         telegramChatId: v.optional(v.string()),
       },
@@ -714,6 +718,7 @@ export function exposeApi(
     consumePairingCode: mutationGeneric({
       args: {
         code: v.string(),
+        botIdentity: v.optional(v.string()),
         telegramUserId: v.string(),
         telegramChatId: v.string(),
       },
@@ -741,7 +746,7 @@ export function exposeApi(
         return await ctx.runQuery((component.lib as any).getUserAgentPairingStatus, args);
       },
     }),
-    importTelegramTokenForAgent: mutationGeneric({
+    importTelegramTokenForAgent: actionGeneric({
       args: {
         consumerUserId: v.string(),
         agentKey: v.string(),
@@ -750,7 +755,17 @@ export function exposeApi(
       },
       handler: async (ctx, args) => {
         await options.auth(ctx, { type: "write", agentKey: args.agentKey });
-        return await ctx.runMutation((component.lib as any).importTelegramTokenForAgent, args);
+        return await ctx.runAction((component.lib as any).importTelegramTokenForAgent, args);
+      },
+    }),
+    reconcileTelegramBotIdentityForAgent: actionGeneric({
+      args: {
+        agentKey: v.string(),
+        secretRef: v.optional(v.string()),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "write", agentKey: args.agentKey });
+        return await ctx.runAction((component.lib as any).reconcileTelegramBotIdentityForAgent, args);
       },
     }),
     getUserAgentOnboardingState: queryGeneric({
@@ -803,10 +818,25 @@ export function exposeApi(
       args: {
         convexSiteUrl: v.string(),
         secretRef: v.optional(v.string()),
+        agentKey: v.optional(v.string()),
       },
       handler: async (ctx, args) => {
         await options.auth(ctx, { type: "read" });
         return await ctx.runAction(component.lib.configureTelegramWebhook, args);
+      },
+    }),
+    softResetTelegramBindingsMissingBotIdentity: mutationGeneric({
+      args: {
+        nowMs: v.optional(v.number()),
+        revokeActiveBindings: v.optional(v.boolean()),
+        expirePendingPairings: v.optional(v.boolean()),
+      },
+      handler: async (ctx, args) => {
+        await options.auth(ctx, { type: "write" });
+        return await ctx.runMutation(
+          (component.lib as any).softResetTelegramBindingsMissingBotIdentity,
+          args,
+        );
       },
     }),
     getWebhookReadiness: actionGeneric({
@@ -1243,6 +1273,18 @@ export function registerRoutes(
     path: `${pathPrefix}/telegram/webhook`,
     method: "POST",
     handler: httpActionGeneric(async (ctx, request) => {
+      const botIdentity = parseTelegramWebhookSecretToken(
+        request.headers.get("X-Telegram-Bot-Api-Secret-Token"),
+      );
+      if (!botIdentity) {
+        return new Response(
+          JSON.stringify({ ok: false, error: "missing or invalid telegram webhook secret token" }),
+          {
+            status: 403,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
       const update = (await request.json()) as {
         update_id?: number;
         message?: {
@@ -1296,6 +1338,7 @@ export function registerRoutes(
         try {
           const pairing = await ctx.runMutation(component.lib.consumePairingCode, {
             code: startCommandCode,
+            botIdentity,
             telegramUserId,
             telegramChatId,
           });
@@ -1347,6 +1390,7 @@ export function registerRoutes(
 
       const mappedRaw = resolveAgentKeyFromBinding
         ? await ctx.runQuery(component.lib.resolveAgentForTelegram, {
+            botIdentity,
             telegramUserId,
             telegramChatId,
           })
@@ -1376,6 +1420,7 @@ export function registerRoutes(
         });
       }
       const metadata: Record<string, string> = {
+        telegramBotIdentity: botIdentity,
         telegramChatId,
         telegramUserId,
       };
@@ -1397,7 +1442,7 @@ export function registerRoutes(
             })
           : undefined;
       await ctx.runMutation(component.lib.enqueue, {
-        conversationId: mapped.conversationId ?? `telegram:${telegramChatId}`,
+        conversationId: mapped.conversationId ?? buildTelegramIngressConversationId(botIdentity, telegramChatId),
         agentKey,
         payload: {
           provider: "telegram",
@@ -1421,6 +1466,10 @@ export function registerRoutes(
 function parseStartCommandCode(messageText: string): string | null {
   const match = messageText.match(/^\/start(?:@\w+)?\s+([A-Za-z0-9_-]{4,128})\s*$/);
   return match?.[1] ?? null;
+}
+
+function buildTelegramIngressConversationId(botIdentity: string, telegramChatId: string) {
+  return `telegram:${botIdentity}:${telegramChatId}`;
 }
 
 type TelegramWebhookMessage = {
